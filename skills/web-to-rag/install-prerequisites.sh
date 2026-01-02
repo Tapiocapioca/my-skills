@@ -260,8 +260,11 @@ else
     warn "Creating AnythingLLM container..."
 
     # Create storage directory
-    STORAGE_DIR="$HOME/.anythingllm/storage"
+    # Use absolute path to avoid issues when running with sudo
+    REAL_HOME=$(eval echo ~${SUDO_USER:-$USER} 2>/dev/null || echo "$HOME")
+    STORAGE_DIR="$REAL_HOME/.anythingllm/storage"
     mkdir -p "$STORAGE_DIR"
+    chmod 755 "$STORAGE_DIR"
 
     docker run -d \
         --name anythingllm \
@@ -288,7 +291,7 @@ else
 
     # Check if we have the Dockerfile locally (cloned repo)
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    YTDLP_DIR="$SCRIPT_DIR/yt-dlp-docker"
+    YTDLP_DIR="$SCRIPT_DIR/infrastructure/docker/yt-dlp"
 
     if [ -f "$YTDLP_DIR/Dockerfile" ]; then
         # Build from local Dockerfile
@@ -298,7 +301,7 @@ else
         # Clone and build
         TEMP_DIR=$(mktemp -d)
         git clone --depth 1 https://github.com/Tapiocapioca/claude-code-skills.git "$TEMP_DIR" 2>/dev/null
-        cd "$TEMP_DIR/yt-dlp-docker"
+        cd "$TEMP_DIR/skills/web-to-rag/infrastructure/docker/yt-dlp"
         docker build -t yt-dlp-server . 2>/dev/null
         rm -rf "$TEMP_DIR"
     fi
@@ -326,7 +329,7 @@ else
 
     # Check if we have the Dockerfile locally (cloned repo)
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    WHISPER_DIR="$SCRIPT_DIR/whisper-docker"
+    WHISPER_DIR="$SCRIPT_DIR/infrastructure/docker/whisper"
 
     if [ -f "$WHISPER_DIR/Dockerfile" ]; then
         # Build from local Dockerfile
@@ -336,7 +339,7 @@ else
         # Clone and build
         TEMP_DIR=$(mktemp -d)
         git clone --depth 1 https://github.com/Tapiocapioca/claude-code-skills.git "$TEMP_DIR" 2>/dev/null
-        cd "$TEMP_DIR/whisper-docker"
+        cd "$TEMP_DIR/skills/web-to-rag/infrastructure/docker/whisper"
         docker build -t whisper-server . 2>/dev/null
         rm -rf "$TEMP_DIR"
     fi
