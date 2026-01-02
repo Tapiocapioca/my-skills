@@ -50,6 +50,19 @@ function Update-PathEnvironment {
     }
 }
 
+# Native command helper - prevents PowerShell from treating stderr as terminating error
+function Invoke-Native {
+    param([scriptblock]$Command)
+    $oldPref = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command 2>&1 | Out-Null
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldPref
+    }
+}
+
 # Docker Container Helper Functions
 function Test-ContainerExists {
     param([string]$Name)
@@ -124,11 +137,12 @@ function Install-DockerContainer {
     } else {
         if ($BuildContext) {
             Write-Warn "Building $Name container..."
-            $buildResult = docker build -t $Name $BuildContext 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Write-Err "Failed to build ${Name}: $buildResult"
+            $exitCode = Invoke-Native { docker build -t $Name $BuildContext }
+            if ($exitCode -ne 0) {
+                Write-Err "Failed to build ${Name}"
                 return $false
             }
+            Write-OK "$Name image built"
             $Image = $Name
         } else {
             Write-Warn "Creating $Name container..."
@@ -146,9 +160,15 @@ function Install-DockerContainer {
 
         $runArgs += $Image
 
-        $runResult = docker run @runArgs 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Err "Failed to create ${Name}: $runResult"
+        # Run container (suppress stderr progress messages)
+        $oldPref = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = docker run @runArgs 2>&1
+        $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = $oldPref
+
+        if ($exitCode -ne 0) {
+            Write-Err "Failed to create ${Name}"
             return $false
         }
         Write-OK "$Name container created"
@@ -184,9 +204,9 @@ function Get-LocalBuildContext {
     $tempDir = "$env:TEMP\claude-code-skills-temp"
     if (-not (Test-Path $tempDir)) {
         Write-Host "  Cloning repository for build..."
-        $cloneResult = git clone --depth 1 https://github.com/Tapiocapioca/claude-code-skills.git $tempDir 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Err "Failed to clone repository: $cloneResult"
+        $exitCode = Invoke-Native { git clone --depth 1 https://github.com/Tapiocapioca/claude-code-skills.git $tempDir }
+        if ($exitCode -ne 0) {
+            Write-Err "Failed to clone repository"
             return $null
         }
     }
@@ -309,8 +329,8 @@ if (-not $SkipDocker) {
         Write-OK "Docker already installed"
 
         # Check if Docker daemon is running
-        $null = docker info 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $exitCode = Invoke-Native { docker info }
+        if ($exitCode -eq 0) {
             Write-OK "Docker daemon is running"
         } else {
             Write-Warn "Docker is installed but not running. Starting Docker Desktop..."
@@ -322,18 +342,20 @@ if (-not $SkipDocker) {
             $interval = 5
             Write-Host "  Waiting for Docker daemon (up to ${maxWait}s)..."
 
+            $dockerReady = $false
             while ($elapsed -lt $maxWait) {
                 Start-Sleep -Seconds $interval
                 $elapsed += $interval
-                $null = docker info 2>&1
-                if ($LASTEXITCODE -eq 0) {
+                $exitCode = Invoke-Native { docker info }
+                if ($exitCode -eq 0) {
                     Write-OK "Docker daemon is now running"
+                    $dockerReady = $true
                     break
                 }
                 Write-Host "  Still waiting... (${elapsed}s)"
             }
 
-            if ($LASTEXITCODE -ne 0) {
+            if (-not $dockerReady) {
                 Write-Err "Docker daemon failed to start after ${maxWait}s"
                 Write-Host "     Please start Docker Desktop manually and re-run script"
                 exit 1
@@ -394,8 +416,8 @@ if (-not $SkipDocker) {
     Install-DockerContainer `
         -Name "yt-dlp-server" `
         -Image "yt-dlp-server" `
-        -Port "8001:8001" `
-        -HealthUrl "http://localhost:8001/health" `
+        -Port "8501:8501" `
+        -HealthUrl "http://localhost:8501/health" `
         -BuildContext $ytdlpContext
 
     # whisper-server
@@ -403,8 +425,8 @@ if (-not $SkipDocker) {
     Install-DockerContainer `
         -Name "whisper-server" `
         -Image "whisper-server" `
-        -Port "8002:8002" `
-        -HealthUrl "http://localhost:8002/health" `
+        -Port "8502:8502" `
+        -HealthUrl "http://localhost:8502/health" `
         -BuildContext $whisperContext
 
     # Cleanup temp clone
@@ -432,20 +454,20 @@ if (-not $SkipMCP) {
     if (Test-Path $anythingllmMcpDir) {
         Write-Warn "  Updating existing installation..."
         Push-Location $anythingllmMcpDir
-        git pull origin main 2>&1 | Out-Null
+        $null = Invoke-Native { git pull origin main }
         Pop-Location
     } else {
-        git clone https://github.com/Tapiocapioca/anythingllm-mcp-server.git $anythingllmMcpDir
+        $null = Invoke-Native { git clone https://github.com/Tapiocapioca/anythingllm-mcp-server.git $anythingllmMcpDir }
     }
 
     Push-Location $anythingllmMcpDir
-    npm install 2>&1 | Out-Null
+    $null = Invoke-Native { npm install }
     Pop-Location
     Write-OK "  AnythingLLM MCP Server installed"
 
     # DuckDuckGo MCP Server (Python package via pip)
     Write-Host "  Installing DuckDuckGo MCP Server..."
-    pip install --upgrade mcp-duckduckgo 2>&1 | Out-Null
+    $null = Invoke-Native { pip install --upgrade mcp-duckduckgo }
     Write-OK "  DuckDuckGo MCP Server installed"
 
     # Crawl4AI MCP Server - ALREADY INCLUDED IN DOCKER CONTAINER
@@ -461,21 +483,21 @@ Write-Step "Verifying extended format support..."
 
 # YouTube and Whisper run in separate Docker containers
 # No local installation needed!
-Write-OK "  YouTube transcript extraction (via yt-dlp-server container, port 8001)"
-Write-OK "  Whisper audio transcription (via whisper-server container, port 8002)"
+Write-OK "  YouTube transcript extraction (via yt-dlp-server container, port 8501)"
+Write-OK "  Whisper audio transcription (via whisper-server container, port 8502)"
 
 # poppler for local PDF extraction (lightweight, still useful)
 Write-Host "  Installing poppler (PDF support)..."
 $pdftotext = Get-Command pdftotext -ErrorAction SilentlyContinue
 if (-not $pdftotext) {
-    choco install poppler -y 2>&1 | Out-Null
+    $null = Invoke-Native { choco install poppler -y }
 }
 Write-OK "  poppler (pdftotext) installed"
 
 Write-Host ""
 Write-Host "  Note: Heavy tools run in separate Docker containers for clean environment." -ForegroundColor Cyan
-Write-Host "        - yt-dlp-server: http://localhost:8001 (YouTube transcripts)" -ForegroundColor Cyan
-Write-Host "        - whisper-server: http://localhost:8002 (Audio transcription)" -ForegroundColor Cyan
+Write-Host "        - yt-dlp-server: http://localhost:8501 (YouTube transcripts)" -ForegroundColor Cyan
+Write-Host "        - whisper-server: http://localhost:8502 (Audio transcription)" -ForegroundColor Cyan
 
 # =============================================================================
 # STEP 8: Create Claude Code MCP Configuration
@@ -532,8 +554,8 @@ if (-not $SkipDocker) {
     $containers = @(
         @{ Name = "crawl4ai"; Url = "http://localhost:11235/health"; Desc = "Crawl4AI" }
         @{ Name = "anythingllm"; Url = "http://localhost:3001/api/health"; Desc = "AnythingLLM" }
-        @{ Name = "yt-dlp-server"; Url = "http://localhost:8001/health"; Desc = "yt-dlp-server (YouTube)" }
-        @{ Name = "whisper-server"; Url = "http://localhost:8002/health"; Desc = "whisper-server (audio)" }
+        @{ Name = "yt-dlp-server"; Url = "http://localhost:8501/health"; Desc = "yt-dlp-server (YouTube)" }
+        @{ Name = "whisper-server"; Url = "http://localhost:8502/health"; Desc = "whisper-server (audio)" }
     )
 
     foreach ($container in $containers) {

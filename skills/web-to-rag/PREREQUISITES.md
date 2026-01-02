@@ -50,8 +50,8 @@ curl -fsSL https://raw.githubusercontent.com/Tapiocapioca/claude-code-skills/mas
 | **Docker Desktop** | Container runtime | - |
 | **Crawl4AI** | Web scraping engine | 11235 |
 | **AnythingLLM** | Local RAG system | 3001 |
-| **yt-dlp-server** | YouTube transcript extraction | 8001 |
-| **whisper-server** | Audio transcription (Whisper) | 8002 |
+| **yt-dlp-server** | YouTube transcript extraction | 8501 |
+| **whisper-server** | Audio transcription (Whisper) | 8502 |
 | **AnythingLLM MCP Server** | Claude ↔ AnythingLLM bridge | - |
 | **DuckDuckGo MCP Server** | Web search for Claude | - |
 | **Crawl4AI MCP Server** | Claude ↔ Crawl4AI bridge | - |
@@ -62,8 +62,8 @@ curl -fsSL https://raw.githubusercontent.com/Tapiocapioca/claude-code-skills/mas
 |-----------|---------|------|------------|
 | **crawl4ai** | Web scraping with JavaScript support | 11235 | ~1GB |
 | **anythingllm** | Local RAG with LLM integration | 3001 | ~500MB |
-| **yt-dlp-server** | YouTube transcript extraction | 8001 | ~200MB |
-| **whisper-server** | Audio transcription with Whisper | 8002 | ~2GB |
+| **yt-dlp-server** | YouTube transcript extraction | 8501 | ~200MB |
+| **whisper-server** | Audio transcription with Whisper | 8502 | ~2GB |
 
 ### Local Tools
 
@@ -130,7 +130,7 @@ cd skills/web-to-rag/infrastructure/docker/yt-dlp
 docker build -t yt-dlp-server .
 docker run -d \
   --name yt-dlp-server \
-  -p 8001:8001 \
+  -p 8501:8501 \
   --restart unless-stopped \
   yt-dlp-server
 
@@ -139,7 +139,7 @@ cd ../whisper
 docker build -t whisper-server .
 docker run -d \
   --name whisper-server \
-  -p 8002:8002 \
+  -p 8502:8502 \
   --restart unless-stopped \
   whisper-server
 ```
@@ -300,7 +300,7 @@ Expected: `{"ok":true}`
 ### Check yt-dlp-server
 
 ```bash
-curl http://localhost:8001/health
+curl http://localhost:8501/health
 ```
 
 Expected: `{"status":"ok","service":"yt-dlp-server",...}`
@@ -308,7 +308,7 @@ Expected: `{"status":"ok","service":"yt-dlp-server",...}`
 ### Check whisper-server
 
 ```bash
-curl http://localhost:8002/health
+curl http://localhost:8502/health
 ```
 
 Expected: `{"status":"ok","service":"whisper-server",...}`
@@ -412,7 +412,7 @@ docker run -d --name anythingllm -p 3002:3001 ...
         │  ┌─────────────┐  ┌─────────────┐    │
         │  │ yt-dlp      │  │ whisper     │    │
         │  │ server      │  │ server      │    │
-        │  │ :8001       │  │ :8002       │    │
+        │  │ :8501       │  │ :8502       │    │
         │  │             │  │             │    │
         │  │ YouTube     │  │ Audio       │    │
         │  │ transcripts │  │ transcribe  │    │

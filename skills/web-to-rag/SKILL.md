@@ -14,7 +14,7 @@ Import content from websites, YouTube, and PDFs into local RAG (AnythingLLM).
 
 | Source | Detection | Tool |
 |--------|-----------|------|
-| YouTube | `youtube.com`, `youtu.be` | yt-dlp-server:8001 |
+| YouTube | `youtube.com`, `youtu.be` | yt-dlp-server:8501 |
 | PDF | `.pdf` extension | pdftotext |
 | Docs site | `/sitemap.xml` exists | Crawl4AI sitemap |
 | Generic | Everything else | Crawl4AI BFS |

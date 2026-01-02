@@ -31,11 +31,11 @@ ENV WHISPER_MODEL=base
 ENV XDG_CACHE_HOME=/app/models
 
 # Expose port
-EXPOSE 8002
+EXPOSE 8502
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8002/health || exit 1
+    CMD curl -f http://localhost:8502/health || exit 1
 
 # Run the server
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8502"]

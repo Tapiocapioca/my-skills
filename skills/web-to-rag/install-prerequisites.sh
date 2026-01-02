@@ -305,7 +305,7 @@ else
 
     docker run -d \
         --name yt-dlp-server \
-        -p 8001:8001 \
+        -p 8501:8501 \
         --restart unless-stopped \
         yt-dlp-server
 
@@ -343,7 +343,7 @@ else
 
     docker run -d \
         --name whisper-server \
-        -p 8002:8002 \
+        -p 8502:8502 \
         --restart unless-stopped \
         whisper-server
 
@@ -395,8 +395,8 @@ step "Verifying extended format support..."
 
 # YouTube and Whisper run in separate Docker containers
 # No local installation needed!
-ok "  YouTube transcript extraction (via yt-dlp-server container, port 8001)"
-ok "  Whisper audio transcription (via whisper-server container, port 8002)"
+ok "  YouTube transcript extraction (via yt-dlp-server container, port 8501)"
+ok "  Whisper audio transcription (via whisper-server container, port 8502)"
 
 # poppler for PDF extraction (pdftotext)
 echo "  Installing poppler (PDF support)..."
@@ -413,8 +413,8 @@ ok "  poppler (pdftotext) installed"
 
 echo ""
 echo -e "${CYAN}  Note: Heavy tools run in separate Docker containers for clean environment.${NC}"
-echo "        - yt-dlp-server: http://localhost:8001 (YouTube transcripts)"
-echo "        - whisper-server: http://localhost:8002 (Audio transcription)"
+echo "        - yt-dlp-server: http://localhost:8501 (YouTube transcripts)"
+echo "        - whisper-server: http://localhost:8502 (Audio transcription)"
 
 # =============================================================================
 # STEP 5: Create Claude Code MCP Configuration

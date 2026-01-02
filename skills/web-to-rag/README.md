@@ -31,8 +31,8 @@ cd skills/web-to-rag
 | Docker Desktop | - | Container runtime |
 | Crawl4AI | 11235 | Web scraping engine |
 | AnythingLLM | 3001 | Local RAG system |
-| yt-dlp-server | 8001 | YouTube transcript extraction |
-| whisper-server | 8002 | Audio transcription (fallback) |
+| yt-dlp-server | 8501 | YouTube transcript extraction |
+| whisper-server | 8502 | Audio transcription (fallback) |
 | MCP Servers | - | Claude ↔ Services bridge |
 | poppler | - | PDF text extraction |
 

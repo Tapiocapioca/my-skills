@@ -6,8 +6,8 @@ Docker containers required by the **web-to-rag** skill.
 
 | Container | Port | Purpose |
 |-----------|------|---------|
-| **yt-dlp** | 8001 | YouTube transcript extraction |
-| **whisper** | 8002 | Audio transcription (fallback) |
+| **yt-dlp** | 8501 | YouTube transcript extraction |
+| **whisper** | 8502 | Audio transcription (fallback) |
 
 ### External Containers (not in this repo)
 
@@ -38,21 +38,21 @@ docker build -t whisper-server .
 # yt-dlp server
 docker run -d \
   --name yt-dlp-server \
-  -p 8001:8001 \
+  -p 8501:8501 \
   --restart unless-stopped \
   yt-dlp-server
 
 # whisper server
 docker run -d \
   --name whisper-server \
-  -p 8002:8002 \
+  -p 8502:8502 \
   --restart unless-stopped \
   whisper-server
 ```
 
 ## API Reference
 
-### yt-dlp-server (port 8001)
+### yt-dlp-server (port 8501)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -61,7 +61,7 @@ docker run -d \
 | `/youtube/transcript` | POST | Extract transcript (body: `{url, language, prefer_manual}`) |
 | `/youtube/audio` | POST | Download audio for whisper fallback |
 
-### whisper-server (port 8002)
+### whisper-server (port 8502)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -74,8 +74,8 @@ docker run -d \
 ## Health Checks
 
 ```bash
-curl http://localhost:8001/health  # yt-dlp
-curl http://localhost:8002/health  # whisper
+curl http://localhost:8501/health  # yt-dlp
+curl http://localhost:8502/health  # whisper
 curl http://localhost:11235/health # crawl4ai
 curl http://localhost:3001/api/health # anythingllm
 ```
