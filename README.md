@@ -6,7 +6,7 @@
 [![Skills](https://img.shields.io/badge/skills-1-blue.svg)](https://github.com/Tapiocapioca/claude-code-skills)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.com/code)
 
-**A collection of production-ready skills for Claude Code**
+**Production-ready skills for Claude Code**
 
 [Installation](#installation) | [Available Skills](#available-skills) | [Contributing](#contributing)
 
@@ -25,7 +25,6 @@
 ### Option 2: Manual Clone
 
 ```bash
-# Clone to skills directory
 mkdir -p ~/.claude/skills
 cd ~/.claude/skills
 git clone https://github.com/Tapiocapioca/claude-code-skills.git
@@ -34,10 +33,7 @@ git clone https://github.com/Tapiocapioca/claude-code-skills.git
 ### Option 3: Single Skill
 
 ```bash
-# Clone repository
 git clone https://github.com/Tapiocapioca/claude-code-skills.git
-
-# Copy only the skill you need
 cp -r claude-code-skills/skills/web-to-rag ~/.claude/skills/
 ```
 
@@ -47,14 +43,11 @@ cp -r claude-code-skills/skills/web-to-rag ~/.claude/skills/
 
 | Skill | Description | Documentation |
 |-------|-------------|---------------|
-| **[web-to-rag](skills/web-to-rag/)** | Scrape websites, YouTube videos, PDFs and embed into local RAG | [README](skills/web-to-rag/README.md) • [Prerequisites](skills/web-to-rag/PREREQUISITES.md) |
+| **[web-to-rag](skills/web-to-rag/)** | Scrape websites, YouTube, PDFs into local RAG | [README](skills/web-to-rag/README.md) • [Prerequisites](skills/web-to-rag/PREREQUISITES.md) |
 
-> 💡 **Free to test!** You can try `web-to-rag` without spending money using [iFlow Platform](https://platform.iflow.cn/en/models) as the LLM provider (free tier available). Sign up [here](https://iflow.cn/oauth?redirect=https%3A%2F%2Fvibex.iflow.cn%2Fsession%2Fsso_login) (no Chinese phone required).
+> **Free to test!** Try `web-to-rag` without cost using [iFlow Platform](https://platform.iflow.cn/en/models) (free tier). Sign up [here](https://iflow.cn/oauth?redirect=https%3A%2F%2Fvibex.iflow.cn%2Fsession%2Fsso_login).
 
-Each skill is **self-contained** with its own:
-- Prerequisites and installers
-- Infrastructure (Docker containers, if needed)
-- Documentation
+Each skill is **self-contained** with its own prerequisites, infrastructure, and documentation.
 
 ---
 
@@ -68,14 +61,11 @@ claude-code-skills/
 │   └── web-to-rag/              # Self-contained skill
 │       ├── SKILL.md             # Skill definition
 │       ├── README.md            # Documentation
-│       ├── install-prerequisites.ps1  # Windows installer
-│       ├── install-prerequisites.sh   # Linux/macOS installer
+│       ├── install-prerequisites.ps1
+│       ├── install-prerequisites.sh
 │       ├── infrastructure/      # Docker containers
-│       │   └── docker/
-│       │       ├── yt-dlp/
-│       │       └── whisper/
 │       ├── references/          # Supporting docs
-│       └── scripts/             # Utility scripts
+│       └── scripts/             # Utilities
 ├── CONTRIBUTING.md
 ├── LICENSE
 └── README.md
@@ -85,8 +75,8 @@ claude-code-skills/
 
 ## Adding New Skills
 
-1. Create a folder under `skills/` with your skill name
-2. Add a `SKILL.md` with YAML frontmatter:
+1. Create folder under `skills/`
+2. Add `SKILL.md` with YAML frontmatter:
    ```yaml
    ---
    name: my-skill-name
@@ -96,16 +86,16 @@ claude-code-skills/
    allowed-tools: Tool1 Tool2 Tool3
    ---
    ```
-3. Add documentation in `README.md`
-4. Include prerequisites installer if the skill needs external services
-5. Update `marketplace.json` to register the skill
-6. Submit a pull request
+3. Add `README.md`
+4. Include installer if needed
+5. Update `marketplace.json`
+6. Submit pull request
 
 ---
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Ideas for New Skills
 
@@ -119,7 +109,7 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ## License
 
-[MIT License](LICENSE) - Feel free to use and modify.
+[MIT License](LICENSE)
 
 ---
 

@@ -1,394 +1,207 @@
-# Scheduling Automatico - Guida Dettagliata
+# Automatic Scheduling
 
-Questa guida descrive come Claude configura aggiornamenti automatici del RAG.
+Configure automatic RAG updates.
 
-## Concetto
+## Concept
 
-Lo scheduling permette di mantenere il RAG aggiornato automaticamente.
-Claude crea script e configura il sistema operativo per eseguirli periodicamente.
+Scheduling keeps RAG updated automatically.
+Claude creates scripts and configures the OS to run them periodically.
 
 ---
 
-## Workflow Guidato
+## Guided Workflow
 
-Quando l'utente chiede di schedulare aggiornamenti:
+When user requests scheduled updates:
 
-### Step 1: Raccolta Informazioni
+### Step 1: Gather Information
 
-Claude chiede:
+Claude asks:
 
 ```
-Per creare lo schedule automatico, ho bisogno di alcune informazioni:
+To create automatic schedule, I need:
 
-1. Quale workspace aggiornare?
-   [Lista workspace esistenti o nuovo nome]
+1. Which workspace to update?
+   [List existing workspaces or new name]
 
-2. Quale URL sorgente?
-   [URL da cui fare scraping]
+2. Source URL?
+   [URL to scrape]
 
-3. Frequenza di aggiornamento?
-   - Giornaliero
-   - Settimanale (quale giorno?)
-   - Mensile (quale giorno del mese?)
+3. Update frequency?
+   - Daily
+   - Weekly (which day?)
+   - Monthly (which day?)
 
-4. Orario preferito?
+4. Preferred time?
    [Default: 3:00 AM]
 ```
 
-### Step 2: Creazione Script
+### Step 2: Create Script
 
-Claude crea uno script nella directory della skill:
+Claude creates a script in the skill directory:
 
 **Windows:** `~/.claude/skills/web-to-rag/scripts/update-rag-{workspace}.ps1`
 **Linux/macOS:** `~/.claude/skills/web-to-rag/scripts/update-rag-{workspace}.sh`
 
-### Step 3: Configurazione Scheduler
+### Step 3: Configure Scheduler
 
 **Windows:** Task Scheduler via PowerShell
 **Linux/macOS:** crontab
 
-### Step 4: Conferma
+### Step 4: Confirm
 
 ```
-✅ Schedule creato con successo!
+✅ Schedule created!
 
-Dettagli:
+Details:
 - Workspace: fastapi-docs
-- Sorgente: https://fastapi.tiangolo.com
-- Frequenza: Ogni lunedì alle 3:00 AM
+- Source: https://fastapi.tiangolo.com
+- Frequency: Every Monday at 3:00 AM
 - Script: ~/.claude/skills/web-to-rag/scripts/update-rag-fastapi-docs.ps1
 - Task ID: UpdateRAG-fastapi-docs
 
-Log disponibili in: ~/.claude/logs/rag-updates.log
+Logs: ~/.claude/logs/rag-updates.log
 
-Per gestire lo schedule:
-- "mostra schedule attivi"
-- "pausa schedule fastapi-docs"
-- "cancella schedule fastapi-docs"
+Manage:
+- "show active schedules"
+- "pause schedule fastapi-docs"
+- "delete schedule fastapi-docs"
 ```
 
 ---
 
-## Script Template - Windows
+## Windows Task Scheduler Commands
 
-```powershell
-<#
-.SYNOPSIS
-    Aggiorna automaticamente il workspace RAG
-.DESCRIPTION
-    Script generato da web-to-rag skill per aggiornamenti schedulati
-.NOTES
-    Workspace: {WORKSPACE}
-    Sorgente: {SOURCE_URL}
-    Creato: {DATE}
-#>
-
-$ErrorActionPreference = "Stop"
-
-# Configurazione
-$WORKSPACE = "{WORKSPACE}"
-$SOURCE_URL = "{SOURCE_URL}"
-$ANYTHINGLLM_URL = "http://localhost:3001"
-$ANYTHINGLLM_KEY = "{API_KEY}"
-$CRAWL4AI_URL = "http://localhost:11235"
-$LOG_FILE = "$env:USERPROFILE\.claude\logs\rag-updates.log"
-
-# Crea directory log se non esiste
-$logDir = Split-Path $LOG_FILE
-if (-not (Test-Path $logDir)) {
-    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-}
-
-function Write-Log {
-    param($Message)
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$timestamp [$WORKSPACE] $Message" | Add-Content $LOG_FILE
-    Write-Host $Message
-}
-
-Write-Log "=== Inizio aggiornamento RAG ==="
-
-# Verifica Docker
-Write-Log "Verifico Docker..."
-$dockerStatus = docker info 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Log "Docker non attivo, provo ad avviare..."
-    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    Start-Sleep -Seconds 30
-}
-
-# Verifica container
-$containers = docker ps --format "{{.Names}}"
-if ($containers -notcontains "crawl4ai") {
-    Write-Log "Avvio container crawl4ai..."
-    docker start crawl4ai
-}
-if ($containers -notcontains "anythingllm") {
-    Write-Log "Avvio container anythingllm..."
-    docker start anythingllm
-}
-
-Start-Sleep -Seconds 10
-
-# Scraping con Crawl4AI
-Write-Log "Scraping di $SOURCE_URL..."
-try {
-    $crawlResult = Invoke-RestMethod -Uri "$CRAWL4AI_URL/crawl" -Method POST -ContentType "application/json" -Body (@{
-        url = $SOURCE_URL
-        output_format = "markdown"
-    } | ConvertTo-Json)
-
-    $content = $crawlResult.markdown
-    Write-Log "Ottenuti $($content.Length) caratteri"
-} catch {
-    Write-Log "ERRORE scraping: $_"
-    exit 1
-}
-
-# Embedding in AnythingLLM
-Write-Log "Embedding nel workspace $WORKSPACE..."
-try {
-    $headers = @{
-        "Authorization" = "Bearer $ANYTHINGLLM_KEY"
-        "Content-Type" = "application/json"
-    }
-
-    $embedResult = Invoke-RestMethod -Uri "$ANYTHINGLLM_URL/api/v1/workspace/$WORKSPACE/embed-text" -Method POST -Headers $headers -Body (@{
-        texts = @($content)
-    } | ConvertTo-Json)
-
-    Write-Log "Embedding completato"
-} catch {
-    Write-Log "ERRORE embedding: $_"
-    exit 1
-}
-
-Write-Log "=== Aggiornamento completato con successo ==="
-```
-
----
-
-## Script Template - Linux/macOS
-
-```bash
-#!/bin/bash
-#
-# Aggiorna automaticamente il workspace RAG
-# Workspace: {WORKSPACE}
-# Sorgente: {SOURCE_URL}
-# Creato: {DATE}
-#
-
-set -e
-
-# Configurazione
-WORKSPACE="{WORKSPACE}"
-SOURCE_URL="{SOURCE_URL}"
-ANYTHINGLLM_URL="http://localhost:3001"
-ANYTHINGLLM_KEY="{API_KEY}"
-CRAWL4AI_URL="http://localhost:11235"
-LOG_FILE="$HOME/.claude/logs/rag-updates.log"
-
-# Crea directory log se non esiste
-mkdir -p "$(dirname "$LOG_FILE")"
-
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [$WORKSPACE] $1" | tee -a "$LOG_FILE"
-}
-
-log "=== Inizio aggiornamento RAG ==="
-
-# Verifica Docker
-log "Verifico Docker..."
-if ! docker info &> /dev/null; then
-    log "Docker non attivo, provo ad avviare..."
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        open -a Docker
-    else
-        sudo systemctl start docker
-    fi
-    sleep 30
-fi
-
-# Verifica container
-if ! docker ps --format '{{.Names}}' | grep -q "^crawl4ai$"; then
-    log "Avvio container crawl4ai..."
-    docker start crawl4ai
-fi
-if ! docker ps --format '{{.Names}}' | grep -q "^anythingllm$"; then
-    log "Avvio container anythingllm..."
-    docker start anythingllm
-fi
-
-sleep 10
-
-# Scraping con Crawl4AI
-log "Scraping di $SOURCE_URL..."
-CONTENT=$(curl -s -X POST "$CRAWL4AI_URL/crawl" \
-    -H "Content-Type: application/json" \
-    -d "{\"url\": \"$SOURCE_URL\", \"output_format\": \"markdown\"}" \
-    | jq -r '.markdown')
-
-if [ -z "$CONTENT" ]; then
-    log "ERRORE: Scraping fallito, contenuto vuoto"
-    exit 1
-fi
-
-log "Ottenuti ${#CONTENT} caratteri"
-
-# Embedding in AnythingLLM
-log "Embedding nel workspace $WORKSPACE..."
-EMBED_RESULT=$(curl -s -X POST "$ANYTHINGLLM_URL/api/v1/workspace/$WORKSPACE/embed-text" \
-    -H "Authorization: Bearer $ANYTHINGLLM_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"texts\": [\"$CONTENT\"]}")
-
-if echo "$EMBED_RESULT" | jq -e '.error' &> /dev/null; then
-    log "ERRORE embedding: $(echo $EMBED_RESULT | jq -r '.error')"
-    exit 1
-fi
-
-log "=== Aggiornamento completato con successo ==="
-```
-
----
-
-## Comandi Task Scheduler Windows
-
-### Creare Task
+### Create Task
 ```powershell
 $action = New-ScheduledTaskAction -Execute "pwsh" -Argument "-File `"$scriptPath`""
 
-# Settimanale
+# Weekly
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 3am
 
-# Giornaliero
+# Daily
 $trigger = New-ScheduledTaskTrigger -Daily -At 3am
 
-# Mensile (primo del mese)
-$trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 4 -DaysOfWeek Monday -At 3am
-
-Register-ScheduledTask -TaskName "UpdateRAG-$WORKSPACE" -Action $action -Trigger $trigger -Description "Aggiorna workspace RAG: $WORKSPACE"
+Register-ScheduledTask -TaskName "UpdateRAG-$WORKSPACE" -Action $action -Trigger $trigger
 ```
 
-### Gestire Task
+### Manage Tasks
 ```powershell
-# Lista task RAG
+# List RAG tasks
 Get-ScheduledTask | Where-Object { $_.TaskName -like "UpdateRAG-*" }
 
-# Pausa task
+# Pause task
 Disable-ScheduledTask -TaskName "UpdateRAG-$WORKSPACE"
 
-# Riprendi task
+# Resume task
 Enable-ScheduledTask -TaskName "UpdateRAG-$WORKSPACE"
 
-# Elimina task
+# Delete task
 Unregister-ScheduledTask -TaskName "UpdateRAG-$WORKSPACE" -Confirm:$false
 
-# Esegui manualmente
+# Run manually
 Start-ScheduledTask -TaskName "UpdateRAG-$WORKSPACE"
 
-# Vedi ultima esecuzione
+# Check last run
 Get-ScheduledTaskInfo -TaskName "UpdateRAG-$WORKSPACE"
 ```
 
 ---
 
-## Comandi crontab Linux/macOS
+## Linux/macOS crontab Commands
 
-### Creare Entry
+### Create Entry
 ```bash
-# Settimanale (lunedì alle 3:00)
+# Weekly (Monday 3:00)
 (crontab -l 2>/dev/null; echo "0 3 * * 1 $SCRIPT_PATH") | crontab -
 
-# Giornaliero (alle 3:00)
+# Daily (3:00)
 (crontab -l 2>/dev/null; echo "0 3 * * * $SCRIPT_PATH") | crontab -
 
-# Mensile (primo del mese alle 3:00)
+# Monthly (1st at 3:00)
 (crontab -l 2>/dev/null; echo "0 3 1 * * $SCRIPT_PATH") | crontab -
 ```
 
-### Gestire Entry
+### Manage Entries
 ```bash
-# Lista crontab
+# List crontab
 crontab -l
 
-# Rimuovi entry specifico
+# Remove specific entry
 crontab -l | grep -v "$WORKSPACE" | crontab -
 
-# Modifica crontab manualmente
+# Edit crontab manually
 crontab -e
 ```
 
 ---
 
-## Gestione da Claude
+## Management from Claude
 
-### Lista Schedule Attivi
+### List Active Schedules
 
 ```
-Utente: "mostra schedule attivi"
+User: "show active schedules"
 
-Claude esegue:
+Claude runs:
 - Windows: Get-ScheduledTask | Where-Object { $_.TaskName -like "UpdateRAG-*" }
 - Linux: crontab -l | grep update-rag
 
 Output:
-Schedule RAG attivi:
+Active RAG schedules:
 
 1. fastapi-docs
-   - Frequenza: Settimanale (Lunedì 3:00)
-   - Ultima esecuzione: 2026-01-06 03:00
-   - Stato: Attivo
+   - Frequency: Weekly (Monday 3:00)
+   - Last run: 2026-01-06 03:00
+   - Status: Active
 
 2. react-docs
-   - Frequenza: Giornaliero (3:00)
-   - Ultima esecuzione: 2026-01-10 03:00
-   - Stato: In pausa
+   - Frequency: Daily (3:00)
+   - Last run: 2026-01-10 03:00
+   - Status: Paused
 ```
 
-### Cancella Schedule
+### Delete Schedule
 
 ```
-Utente: "cancella schedule fastapi-docs"
+User: "delete schedule fastapi-docs"
 
-Claude esegue:
-1. Rimuove task scheduler/crontab
-2. Elimina script
-3. Conferma: "Schedule fastapi-docs eliminato"
+Claude:
+1. Removes task scheduler/crontab
+2. Deletes script
+3. Confirms: "Schedule fastapi-docs deleted"
 ```
 
-### Modifica Frequenza
+### Change Frequency
 
 ```
-Utente: "cambia frequenza fastapi-docs a giornaliero"
+User: "change fastapi-docs frequency to daily"
 
-Claude esegue:
-1. Rimuove vecchio trigger
-2. Crea nuovo trigger giornaliero
-3. Conferma: "Frequenza aggiornata a giornaliero alle 3:00"
+Claude:
+1. Removes old trigger
+2. Creates daily trigger
+3. Confirms: "Frequency updated to daily at 3:00"
 ```
 
 ---
 
-## Limitazioni
+## Limitations
 
-1. **Docker deve essere attivo** - Lo script prova ad avviarlo ma potrebbe fallire
-2. **API dirette** - Non usa Claude Code interattivo
-3. **Nessun feedback** - Solo log file
-4. **Single URL** - Uno script per URL sorgente
-5. **Credenziali** - API key salvata nello script (considerare secrets manager)
+1. **Docker must be running** - Script tries to start but may fail
+2. **Direct API calls** - No interactive Claude Code
+3. **No feedback** - Log file only
+4. **Single URL** - One script per source URL
+5. **Credentials** - API key stored in script (consider secrets manager)
 
 ---
 
 ## Best Practices
 
-1. **Orari notturni** - Schedule alle 3:00 AM per non interferire
-2. **Monitora log** - Controlla periodicamente ~/.claude/logs/
-3. **Backup workspace** - Prima di aggiornamenti massivi
-4. **Test manuale** - Esegui script una volta prima di schedulare
-5. **Rate limiting** - Non schedulare troppi update contemporanei
+1. **Night hours** - Schedule at 3:00 AM to avoid interference
+2. **Monitor logs** - Check ~/.claude/logs/ periodically
+3. **Backup workspace** - Before major updates
+4. **Manual test** - Run script once before scheduling
+5. **Rate limiting** - Don't schedule too many simultaneous updates
 
 ---
 
-*Ultimo aggiornamento: Gennaio 2026*
+*Last updated: January 2026*

@@ -1,215 +1,209 @@
 # Troubleshooting web-to-rag
 
-Guida alla risoluzione dei problemi comuni.
-
 ---
 
-## Crawl4AI non raggiungibile
+## Crawl4AI Unreachable
 
-### Sintomo
+### Symptom
 ```
-❌ Crawl4AI: non raggiungibile
+❌ Crawl4AI: unreachable
 ```
-oppure timeout su `mcp__crawl4ai__md`
+or timeout on `mcp__crawl4ai__md`
 
-### Causa
-Docker non avviato o container `crawl4ai` fermo.
+### Cause
+Docker stopped or `crawl4ai` container halted.
 
 ### Fix
 
-1. **Verifica Docker Desktop sia avviato**
-   - Windows: icona Docker nella system tray
-   - Se non c'è, avvia Docker Desktop
+1. **Verify Docker Desktop runs**
+   - Windows: Docker icon in system tray
+   - Start Docker Desktop if missing
 
-2. **Verifica container**
+2. **Check container**
    ```bash
    docker ps | grep crawl4ai
    ```
 
-3. **Se container non presente o fermo**
+3. **Start if stopped**
    ```bash
    docker start crawl4ai
    ```
 
-4. **Se container non esiste**
+4. **Create if missing**
    ```bash
    docker run -d --name crawl4ai -p 11235:11235 unclecode/crawl4ai
    ```
 
-5. **Test connessione**
+5. **Test connection**
    ```bash
    curl http://localhost:11235/health
    ```
 
 ---
 
-## AnythingLLM non raggiungibile
+## AnythingLLM Unreachable
 
-### Sintomo
+### Symptom
 ```
-❌ AnythingLLM: non raggiungibile
+❌ AnythingLLM: unreachable
 ```
-oppure errore su operazioni workspace
+or workspace operation errors
 
-### Causa
-Container `anythingllm` fermo o porta 3001 occupata.
+### Cause
+Container `anythingllm` stopped or port 3001 occupied.
 
 ### Fix
 
-1. **Verifica container**
+1. **Check container**
    ```bash
    docker ps | grep anythingllm
    ```
 
-2. **Se fermo**
+2. **Start if stopped**
    ```bash
    docker start anythingllm
    ```
 
-3. **Se porta occupata**
+3. **Check port conflict**
    ```bash
-   # Trova processo sulla porta
+   # Windows
    netstat -ano | findstr :3001
 
-   # Su Linux/Mac
+   # Linux/Mac
    lsof -i :3001
    ```
 
-4. **Test connessione**
+4. **Test connection**
    ```bash
    curl http://localhost:3001/api/health
    ```
 
 ---
 
-## Errore "Client not initialized"
+## "Client not initialized" Error
 
-### Sintomo
+### Symptom
 ```
 Error: AnythingLLM client not initialized
 ```
 
-### Causa
-Il server MCP AnythingLLM richiede inizializzazione ad ogni sessione.
+### Cause
+MCP server requires initialization each session.
 
 ### Fix
-Esegui:
 ```
 mcp__anythingllm__initialize_anythingllm
-  apiKey: "TZZAC6K-Q8K4DJ6-NBP90YN-DY52YAQ"
+  apiKey: "YOUR_API_KEY"
   baseUrl: "http://localhost:3001"
 ```
 
 ---
 
-## Errore 403 Forbidden durante scraping
+## 403 Forbidden During Scraping
 
-### Sintomo
-Crawl4AI restituisce 403 su alcune pagine.
+### Symptom
+Crawl4AI returns 403 on some pages.
 
-### Causa
-Il sito blocca bot/scraper automatici.
+### Cause
+Site blocks automated scrapers.
 
 ### Fix
 
-1. **Prova con headers custom** (se Crawl4AI lo supporta)
-
-2. **Usa Playwright come fallback**
+1. **Use Playwright fallback**
    ```
    mcp__plugin_playwright_playwright__browser_navigate
-     url: "https://sito-bloccato.com"
+     url: "https://blocked-site.com"
 
    mcp__plugin_playwright_playwright__browser_snapshot
    ```
 
-3. **Rispetta robots.txt**
-   - Alcuni siti lo richiedono
-   - Verifica: `https://sito.com/robots.txt`
+2. **Check robots.txt**
+   - Verify: `https://site.com/robots.txt`
 
 ---
 
 ## Rate Limit Exceeded (429)
 
-### Sintomo
-Errore 429 o flickering della console.
+### Symptom
+Error 429 or console flickering.
 
-### Causa
-Troppe richieste parallele (superato limite 10 RPM).
+### Cause
+Too many parallel requests (exceeded 10 RPM limit).
 
 ### Fix
 
-1. **STOP immediato** - non fare altre richieste
-2. **Attendi 60 secondi**
-3. **Riduci parallelismo**
-   - Max 3 URL per batch (non 4+)
-   - Aspetta risposta prima del prossimo batch
+1. **Stop immediately** - no more requests
+2. **Wait 60 seconds**
+3. **Reduce parallelism**
+   - Max 3 URLs per batch
+   - Wait for response before next batch
 
 ---
 
-## Contenuto vuoto dopo scraping
+## Empty Content After Scraping
 
-### Sintomo
-Crawl4AI restituisce markdown vuoto o quasi.
+### Symptom
+Crawl4AI returns empty or minimal markdown.
 
-### Causa
-- Sito usa JavaScript pesante per rendering
-- Contenuto caricato dinamicamente
-- Anti-bot attivo
+### Cause
+- Heavy JavaScript rendering
+- Dynamic content loading
+- Active anti-bot measures
 
 ### Fix
 
-1. **Usa Playwright** per rendering JavaScript
+1. **Use Playwright** for JavaScript rendering
    ```
    browser_navigate → browser_snapshot
    ```
 
-2. **Aspetta caricamento** con Playwright
+2. **Wait for content**
    ```
    mcp__plugin_playwright_playwright__browser_wait_for
-     text: "contenuto atteso"
+     text: "expected content"
    ```
 
 ---
 
-## Workspace non trovato
+## Workspace Not Found
 
-### Sintomo
+### Symptom
 ```
-Workspace 'nome' not found
+Workspace 'name' not found
 ```
 
 ### Fix
 
-1. **Lista workspace esistenti**
+1. **List existing workspaces**
    ```
    mcp__anythingllm__list_workspaces
    ```
 
-2. **Verifica nome esatto** (case-sensitive, usa slug)
+2. **Check exact name** (case-sensitive, use slug)
 
-3. **Crea se non esiste**
+3. **Create if missing**
    ```
    mcp__anythingllm__create_workspace
-     name: "nome-workspace"
+     name: "workspace-name"
    ```
 
 ---
 
-## Docker Desktop non si avvia
+## Docker Desktop Fails to Start
 
-### Sintomo
-Docker Desktop non parte o crasha.
+### Symptom
+Docker Desktop crashes or hangs.
 
-### Fix Windows
+### Fix (Windows)
 
-1. **Riavvia servizio Docker**
+1. **Restart Docker service**
    ```powershell
    Restart-Service docker
    ```
 
-2. **Verifica virtualizzazione attiva** nel BIOS
+2. **Enable virtualization** in BIOS
 
-3. **WSL2 aggiornato**
+3. **Update WSL2**
    ```bash
    wsl --update
    ```
@@ -219,21 +213,21 @@ Docker Desktop non parte o crasha.
 
 ---
 
-## Embedding fallisce silenziosamente
+## Embedding Fails Silently
 
-### Sintomo
-`embed_text` sembra funzionare ma documenti non appaiono.
+### Symptom
+`embed_text` completes but documents missing.
 
 ### Fix
 
-1. **Verifica workspace corretto**
+1. **Verify workspace**
    ```
    mcp__anythingllm__list_documents
-     slug: "nome-workspace"
+     slug: "workspace-name"
    ```
 
-2. **Contenuto troppo grande?**
-   - Split in chunks < 50KB
+2. **Check content size**
+   - Split chunks < 50KB
 
-3. **Formato testo corretto?**
-   - Deve essere array di stringhe: `["testo1", "testo2"]`
+3. **Verify format**
+   - Must be string array: `["text1", "text2"]`
