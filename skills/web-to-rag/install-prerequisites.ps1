@@ -415,19 +415,17 @@ if (-not $SkipDocker) {
 # STEP 6: Pull Docker Containers
 # =============================================================================
 if (-not $SkipDocker) {
-    # Crawl4AI
+    # Crawl4AI - uses Docker named volume for browser cache and data
     Install-DockerContainer `
         -Name "crawl4ai" `
         -Image "unclecode/crawl4ai:latest" `
         -Port "11235:11235" `
-        -HealthUrl "http://localhost:11235/health"
+        -HealthUrl "http://localhost:11235/health" `
+        -ExtraArgs @{
+            "-v" = "crawl4ai-data:/app/data"
+        }
 
-    # AnythingLLM - needs storage volume
-    $storageDir = "$env:USERPROFILE\.anythingllm\storage"
-    if (-not (Test-Path $storageDir)) {
-        New-Item -ItemType Directory -Path $storageDir -Force | Out-Null
-    }
-
+    # AnythingLLM - uses Docker named volume for persistence
     Install-DockerContainer `
         -Name "anythingllm" `
         -Image "mintplexlabs/anythingllm:latest" `
@@ -435,26 +433,32 @@ if (-not $SkipDocker) {
         -HealthUrl "http://localhost:3001/api/health" `
         -ExtraArgs @{
             "-e" = "STORAGE_DIR=/app/server/storage"
-            "-v" = "${storageDir}:/app/server/storage"
+            "-v" = "anythingllm-storage:/app/server/storage"
         }
 
-    # yt-dlp-server
+    # yt-dlp-server - uses Docker named volume for cache
     $ytdlpContext = Get-LocalBuildContext -ContainerName "yt-dlp-server" -SubPath "infrastructure\docker\yt-dlp"
     Install-DockerContainer `
         -Name "yt-dlp-server" `
         -Image "yt-dlp-server" `
         -Port "8501:8501" `
         -HealthUrl "http://localhost:8501/health" `
-        -BuildContext $ytdlpContext
+        -BuildContext $ytdlpContext `
+        -ExtraArgs @{
+            "-v" = "ytdlp-cache:/app/temp"
+        }
 
-    # whisper-server
+    # whisper-server - uses Docker named volume for model cache
     $whisperContext = Get-LocalBuildContext -ContainerName "whisper-server" -SubPath "infrastructure\docker\whisper"
     Install-DockerContainer `
         -Name "whisper-server" `
         -Image "whisper-server" `
         -Port "8502:8502" `
         -HealthUrl "http://localhost:8502/health" `
-        -BuildContext $whisperContext
+        -BuildContext $whisperContext `
+        -ExtraArgs @{
+            "-v" = "whisper-models:/app/models"
+        }
 
     # Cleanup temp clone
     $tempDir = "$env:TEMP\claude-code-skills-temp"
@@ -474,12 +478,12 @@ if (-not $SkipMCP) {
         New-Item -ItemType Directory -Path $mcpDir -Force | Out-Null
     }
 
-    # AnythingLLM MCP Server (from Tapiocapioca's fork - Node.js)
-    Write-Host "  Installing AnythingLLM MCP Server..."
+    # 1. AnythingLLM MCP Server (from Tapiocapioca's fork - Node.js)
+    Write-Host "  [1/4] Installing AnythingLLM MCP Server..."
     $anythingllmMcpDir = "$mcpDir\anythingllm-mcp-server"
 
     if (Test-Path $anythingllmMcpDir) {
-        Write-Warn "  Updating existing installation..."
+        Write-Warn "    Updating existing installation..."
         Push-Location $anythingllmMcpDir
         $null = Invoke-Native { git pull origin main }
         Pop-Location
@@ -490,17 +494,47 @@ if (-not $SkipMCP) {
     Push-Location $anythingllmMcpDir
     $null = Invoke-Native { npm install }
     Pop-Location
-    Write-OK "  AnythingLLM MCP Server installed"
+    Write-OK "    AnythingLLM MCP Server installed"
 
-    # DuckDuckGo MCP Server (Python package via pip)
-    Write-Host "  Installing DuckDuckGo MCP Server..."
-    $null = Invoke-Native { pip install --upgrade mcp-duckduckgo }
-    Write-OK "  DuckDuckGo MCP Server installed"
+    # 2. DuckDuckGo MCP Server (from Tapiocapioca's fork - Python)
+    Write-Host "  [2/4] Installing DuckDuckGo MCP Server..."
+    $duckduckgoMcpDir = "$mcpDir\mcp-duckduckgo"
 
-    # Crawl4AI MCP Server - ALREADY INCLUDED IN DOCKER CONTAINER
-    # The Crawl4AI container has a built-in MCP server via SSE endpoint
-    # No separate installation needed - just configure the SSE URL
-    Write-OK "  Crawl4AI MCP Server (built into Docker container)"
+    if (Test-Path $duckduckgoMcpDir) {
+        Write-Warn "    Updating existing installation..."
+        Push-Location $duckduckgoMcpDir
+        $null = Invoke-Native { git pull origin main }
+        Pop-Location
+    } else {
+        $null = Invoke-Native { git clone https://github.com/Tapiocapioca/mcp-duckduckgo.git $duckduckgoMcpDir }
+    }
+
+    Push-Location $duckduckgoMcpDir
+    $null = Invoke-Native { pip install -e . }
+    Pop-Location
+    Write-OK "    DuckDuckGo MCP Server installed"
+
+    # 3. yt-dlp MCP Server (from Tapiocapioca's fork - Node.js)
+    Write-Host "  [3/4] Installing yt-dlp MCP Server..."
+    $ytdlpMcpDir = "$mcpDir\yt-dlp-mcp"
+
+    if (Test-Path $ytdlpMcpDir) {
+        Write-Warn "    Updating existing installation..."
+        Push-Location $ytdlpMcpDir
+        $null = Invoke-Native { git pull origin main }
+        Pop-Location
+    } else {
+        $null = Invoke-Native { git clone https://github.com/Tapiocapioca/yt-dlp-mcp.git $ytdlpMcpDir }
+    }
+
+    Push-Location $ytdlpMcpDir
+    $null = Invoke-Native { npm install }
+    Pop-Location
+    Write-OK "    yt-dlp MCP Server installed"
+
+    # 4. Crawl4AI MCP Server - ALREADY INCLUDED IN DOCKER CONTAINER
+    Write-Host "  [4/4] Crawl4AI MCP Server..."
+    Write-OK "    Built into Docker container (SSE endpoint)"
 }
 
 # =============================================================================
@@ -551,6 +585,10 @@ $mcpConfig = @"
     },
     "duckduckgo-search": {
       "command": "mcp-duckduckgo"
+    },
+    "yt-dlp": {
+      "command": "node",
+      "args": ["$userProfile/.claude/mcp-servers/yt-dlp-mcp/lib/index.mjs"]
     },
     "crawl4ai": {
       "type": "sse",
@@ -606,6 +644,7 @@ if (-not $SkipDocker) {
 
 # Check MCP servers
 if (-not $SkipMCP) {
+    # AnythingLLM MCP
     if (Test-Path "$env:USERPROFILE\.claude\mcp-servers\anythingllm-mcp-server\src\index.js") {
         Write-OK "AnythingLLM MCP Server installed"
     } else {
@@ -613,14 +652,25 @@ if (-not $SkipMCP) {
         $allOK = $false
     }
 
-    # Check if mcp-duckduckgo is in PATH
+    # DuckDuckGo MCP
     $duckduckgo = Get-Command mcp-duckduckgo -ErrorAction SilentlyContinue
     if ($duckduckgo) {
         Write-OK "DuckDuckGo MCP Server installed"
     } else {
-        Write-Err "DuckDuckGo MCP Server NOT found (run: pip install mcp-duckduckgo)"
+        Write-Err "DuckDuckGo MCP Server NOT found"
         $allOK = $false
     }
+
+    # yt-dlp MCP
+    if (Test-Path "$env:USERPROFILE\.claude\mcp-servers\yt-dlp-mcp\lib\index.mjs") {
+        Write-OK "yt-dlp MCP Server installed"
+    } else {
+        Write-Err "yt-dlp MCP Server NOT found"
+        $allOK = $false
+    }
+
+    # Crawl4AI MCP (built into container, just verify container is running)
+    Write-OK "Crawl4AI MCP Server (via Docker SSE endpoint)"
 }
 
 # Check local tools
@@ -662,7 +712,14 @@ Write-Host "   cd $env:USERPROFILE\.claude\skills"
 Write-Host "   git clone https://github.com/Tapiocapioca/claude-code-skills.git"
 Write-Host "   # Or copy the web-to-rag folder manually"
 Write-Host ""
-Write-Host "4. RESTART Claude Code to load the MCP servers"
+Write-Host "========================================" -ForegroundColor Yellow
+Write-Host " 4. RESTART CLAUDE CODE" -ForegroundColor Yellow
+Write-Host "========================================" -ForegroundColor Yellow
+Write-Host "   Close and reopen Claude Code to load the 4 MCP servers:"
+Write-Host "   - anythingllm     (RAG queries)"
+Write-Host "   - duckduckgo-search (web search)"
+Write-Host "   - yt-dlp          (YouTube transcripts)"
+Write-Host "   - crawl4ai        (web scraping)"
 Write-Host ""
 Write-Host "AUTO-START CONFIGURATION:" -ForegroundColor Cyan
 Write-Host "   - Docker Desktop: starts automatically with Windows (minimized)"

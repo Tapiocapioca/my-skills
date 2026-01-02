@@ -54,6 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/Tapiocapioca/claude-code-skills/mas
 | **whisper-server** | Audio transcription (Whisper) | 8502 |
 | **AnythingLLM MCP Server** | Claude ↔ AnythingLLM bridge | - |
 | **DuckDuckGo MCP Server** | Web search for Claude | - |
+| **yt-dlp MCP Server** | YouTube info for Claude | - |
 | **Crawl4AI MCP Server** | Claude ↔ Crawl4AI bridge | - |
 
 ### Docker Containers
@@ -64,6 +65,39 @@ curl -fsSL https://raw.githubusercontent.com/Tapiocapioca/claude-code-skills/mas
 | **anythingllm** | Local RAG with LLM integration | 3001 | ~500MB |
 | **yt-dlp-server** | YouTube transcript extraction | 8501 | ~200MB |
 | **whisper-server** | Audio transcription with Whisper | 8502 | ~2GB |
+
+### Docker Volumes
+
+All persistent data is stored in Docker named volumes (not on the filesystem):
+
+| Volume | Container | Purpose |
+|--------|-----------|---------|
+| **crawl4ai-data** | crawl4ai | Browser cache and crawl data |
+| **anythingllm-storage** | anythingllm | RAG database, workspaces, embeddings |
+| **ytdlp-cache** | yt-dlp-server | Downloaded audio cache |
+| **whisper-models** | whisper-server | Cached Whisper models (~150MB for base) |
+
+To inspect volumes:
+```bash
+docker volume ls
+docker volume inspect anythingllm-storage
+```
+
+To backup all volumes:
+```bash
+# Backup all skill volumes
+for vol in crawl4ai-data anythingllm-storage ytdlp-cache whisper-models; do
+  docker run --rm -v $vol:/data -v $(pwd):/backup alpine tar czf /backup/$vol.tar.gz -C /data .
+done
+
+# Restore a volume
+docker run --rm -v anythingllm-storage:/data -v $(pwd):/backup alpine tar xzf /backup/anythingllm-storage.tar.gz -C /data
+```
+
+To remove all volumes (WARNING: deletes all data):
+```bash
+docker volume rm crawl4ai-data anythingllm-storage ytdlp-cache whisper-models
+```
 
 ### Auto-Start Configuration (Windows)
 
@@ -86,9 +120,12 @@ This means after a system reboot, Docker will start automatically and all contai
 
 The MCP servers are installed from **Tapiocapioca's forks** (customized versions):
 
-- **AnythingLLM MCP**: https://github.com/Tapiocapioca/anythingllm-mcp-server
-- **DuckDuckGo MCP**: https://github.com/Tapiocapioca/mcp-duckduckgo
-- **Crawl4AI MCP**: Built into Docker container (SSE endpoint)
+| MCP Server | Repository | Language |
+|------------|------------|----------|
+| **AnythingLLM MCP** | https://github.com/Tapiocapioca/anythingllm-mcp-server | Node.js |
+| **DuckDuckGo MCP** | https://github.com/Tapiocapioca/mcp-duckduckgo | Python |
+| **yt-dlp MCP** | https://github.com/Tapiocapioca/yt-dlp-mcp | Node.js |
+| **Crawl4AI MCP** | Built into Docker container (SSE endpoint) | - |
 
 ---
 
@@ -118,61 +155,77 @@ sudo usermod -aG docker $USER
 ### 2. Create Docker Containers
 
 ```bash
-# Crawl4AI (web scraping)
+# Crawl4AI (web scraping) - uses Docker named volume
 docker run -d \
   --name crawl4ai \
   -p 11235:11235 \
+  -v crawl4ai-data:/app/data \
   --restart unless-stopped \
   unclecode/crawl4ai:latest
 
-# AnythingLLM (local RAG)
-mkdir -p ~/.anythingllm/storage
+# AnythingLLM (local RAG) - uses Docker named volume
 docker run -d \
   --name anythingllm \
   -p 3001:3001 \
   -e STORAGE_DIR="/app/server/storage" \
-  -v ~/.anythingllm/storage:/app/server/storage \
+  -v anythingllm-storage:/app/server/storage \
   --restart unless-stopped \
   mintplexlabs/anythingllm:latest
 
-# yt-dlp-server (YouTube transcripts)
+# yt-dlp-server (YouTube transcripts) - uses Docker named volume
 # Build from the skill's infrastructure directory
 cd skills/web-to-rag/infrastructure/docker/yt-dlp
 docker build -t yt-dlp-server .
 docker run -d \
   --name yt-dlp-server \
   -p 8501:8501 \
+  -v ytdlp-cache:/app/temp \
   --restart unless-stopped \
   yt-dlp-server
 
-# whisper-server (audio transcription)
+# whisper-server (audio transcription) - uses Docker named volume
 cd ../whisper
 docker build -t whisper-server .
 docker run -d \
   --name whisper-server \
   -p 8502:8502 \
+  -v whisper-models:/app/models \
   --restart unless-stopped \
   whisper-server
 ```
 
 ### 3. Install MCP Servers
 
+There are **4 MCP servers** to install:
+
 ```bash
 # Create MCP directory
 mkdir -p ~/.claude/mcp-servers
 cd ~/.claude/mcp-servers
 
-# AnythingLLM MCP (from Tapiocapioca's fork - Node.js)
+# 1. AnythingLLM MCP (from Tapiocapioca's fork - Node.js)
 git clone https://github.com/Tapiocapioca/anythingllm-mcp-server.git
 cd anythingllm-mcp-server && npm install && cd ..
 
-# DuckDuckGo MCP (Python package)
-pip install mcp-duckduckgo
+# 2. DuckDuckGo MCP (from Tapiocapioca's fork - Python)
+git clone https://github.com/Tapiocapioca/mcp-duckduckgo.git
+cd mcp-duckduckgo && pip install -e . && cd ..
 
-# Crawl4AI MCP - NO INSTALLATION NEEDED!
+# 3. yt-dlp MCP (from Tapiocapioca's fork - Node.js)
+git clone https://github.com/Tapiocapioca/yt-dlp-mcp.git
+cd yt-dlp-mcp && npm install && cd ..
+
+# 4. Crawl4AI MCP - NO INSTALLATION NEEDED!
 # The Crawl4AI Docker container includes a built-in MCP server
 # via SSE endpoint at http://localhost:11235/mcp/sse
 ```
+
+| MCP Server | Language | Purpose |
+|------------|----------|---------|
+| **anythingllm-mcp-server** | Node.js | Query your RAG knowledge base |
+| **mcp-duckduckgo** | Python | Web search |
+| **yt-dlp-mcp** | Node.js | YouTube video info and transcripts |
+| **crawl4ai** | Docker SSE | Web scraping with JS rendering |
 
 ---
 
@@ -255,6 +308,10 @@ If the installer created it, update `YOUR_API_KEY_HERE` with your AnythingLLM AP
     "duckduckgo-search": {
       "command": "mcp-duckduckgo"
     },
+    "yt-dlp": {
+      "command": "node",
+      "args": ["~/.claude/mcp-servers/yt-dlp-mcp/lib/index.mjs"]
+    },
     "crawl4ai": {
       "type": "sse",
       "url": "http://localhost:11235/mcp/sse"
@@ -271,7 +328,11 @@ If the installer created it, update `YOUR_API_KEY_HERE` with your AnythingLLM AP
 
 ### Step 3: Restart Claude Code
 
-Close and reopen Claude Code for the MCP servers to load.
+**Close and reopen Claude Code** for the 4 MCP servers to load:
+- `anythingllm` - RAG queries
+- `duckduckgo-search` - Web search
+- `yt-dlp` - YouTube transcripts
+- `crawl4ai` - Web scraping
 
 ---
 
