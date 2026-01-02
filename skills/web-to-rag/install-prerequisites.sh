@@ -126,7 +126,7 @@ if [[ "$OS" == "macos" ]]; then
 
 elif [[ "$OS" == "debian" ]]; then
     sudo apt-get update
-    sudo apt-get install -y git curl wget
+    sudo apt-get install -y git curl wget unzip
 
     # Install Node.js (via NodeSource)
     if ! command -v node &> /dev/null; then
@@ -140,7 +140,7 @@ elif [[ "$OS" == "debian" ]]; then
     ok "Python installed: $(python3 --version)"
 
 elif [[ "$OS" == "redhat" ]]; then
-    sudo yum install -y git curl wget
+    sudo yum install -y git curl wget unzip
 
     # Install Node.js
     if ! command -v node &> /dev/null; then
@@ -304,12 +304,14 @@ if docker ps -a --format '{{.Names}}' | grep -q "^anythingllm$"; then
 else
     warn "Creating AnythingLLM container..."
 
-    # Create storage directory
+    # Create storage directory with correct permissions for container user (UID 1000)
     # Use absolute path to avoid issues when running with sudo
     REAL_HOME=$(eval echo ~${SUDO_USER:-$USER} 2>/dev/null || echo "$HOME")
     STORAGE_DIR="$REAL_HOME/.anythingllm/storage"
     mkdir -p "$STORAGE_DIR"
     chmod 755 "$STORAGE_DIR"
+    # AnythingLLM container runs as UID 1000, not root
+    chown -R 1000:1000 "$REAL_HOME/.anythingllm"
 
     docker run -d \
         --name anythingllm \
@@ -340,14 +342,12 @@ else
 
     if [ -f "$YTDLP_DIR/Dockerfile" ]; then
         # Build from local Dockerfile
-        cd "$YTDLP_DIR"
-        docker build -t yt-dlp-server . 2>/dev/null
+        docker build -t yt-dlp-server "$YTDLP_DIR" 2>/dev/null
     else
-        # Clone and build
+        # Clone and build (stay in current directory to avoid getcwd issues)
         TEMP_DIR=$(mktemp -d)
         git clone --depth 1 https://github.com/Tapiocapioca/claude-code-skills.git "$TEMP_DIR" 2>/dev/null
-        cd "$TEMP_DIR/skills/web-to-rag/infrastructure/docker/yt-dlp"
-        docker build -t yt-dlp-server . 2>/dev/null
+        docker build -t yt-dlp-server "$TEMP_DIR/skills/web-to-rag/infrastructure/docker/yt-dlp" 2>/dev/null
         rm -rf "$TEMP_DIR"
     fi
 
@@ -379,14 +379,12 @@ else
 
     if [ -f "$WHISPER_DIR/Dockerfile" ]; then
         # Build from local Dockerfile
-        cd "$WHISPER_DIR"
-        docker build -t whisper-server . 2>/dev/null
+        docker build -t whisper-server "$WHISPER_DIR" 2>/dev/null
     else
-        # Clone and build
+        # Clone and build (stay in current directory to avoid getcwd issues)
         TEMP_DIR=$(mktemp -d)
         git clone --depth 1 https://github.com/Tapiocapioca/claude-code-skills.git "$TEMP_DIR" 2>/dev/null
-        cd "$TEMP_DIR/skills/web-to-rag/infrastructure/docker/whisper"
-        docker build -t whisper-server . 2>/dev/null
+        docker build -t whisper-server "$TEMP_DIR/skills/web-to-rag/infrastructure/docker/whisper" 2>/dev/null
         rm -rf "$TEMP_DIR"
     fi
 
