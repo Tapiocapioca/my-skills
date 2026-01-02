@@ -65,6 +65,17 @@ curl -fsSL https://raw.githubusercontent.com/Tapiocapioca/claude-code-skills/mas
 | **yt-dlp-server** | YouTube transcript extraction | 8501 | ~200MB |
 | **whisper-server** | Audio transcription with Whisper | 8502 | ~2GB |
 
+### Auto-Start Configuration (Windows)
+
+The installer automatically configures:
+
+| Component | Behavior | How to Disable |
+|-----------|----------|----------------|
+| **Docker Desktop** | Starts with Windows (minimized) | Remove shortcut from `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` |
+| **All containers** | Auto-restart when Docker starts | `docker update --restart=no <container-name>` |
+
+This means after a system reboot, Docker will start automatically and all containers will be available without manual intervention.
+
 ### Local Tools
 
 | Tool | Purpose | Auto-installed |

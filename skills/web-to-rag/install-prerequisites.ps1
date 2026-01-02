@@ -382,6 +382,33 @@ if (-not $SkipDocker) {
         }
         exit 0
     }
+
+    # Configure Docker Desktop to start with Windows
+    Write-Step "Configuring Docker Desktop to start with Windows..."
+
+    $dockerStartupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Docker Desktop.lnk"
+    $dockerExePath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+
+    if (Test-Path $dockerExePath) {
+        if (-not (Test-Path $dockerStartupPath)) {
+            try {
+                $WshShell = New-Object -ComObject WScript.Shell
+                $Shortcut = $WshShell.CreateShortcut($dockerStartupPath)
+                $Shortcut.TargetPath = $dockerExePath
+                $Shortcut.Arguments = "--minimized"
+                $Shortcut.WorkingDirectory = "C:\Program Files\Docker\Docker"
+                $Shortcut.Description = "Docker Desktop - Auto-start"
+                $Shortcut.Save()
+                Write-OK "Docker Desktop configured to start with Windows (minimized)"
+            } catch {
+                Write-Warn "Could not create startup shortcut: $_"
+            }
+        } else {
+            Write-OK "Docker Desktop already configured to start with Windows"
+        }
+    } else {
+        Write-Warn "Docker Desktop executable not found, skipping auto-start configuration"
+    }
 }
 
 # =============================================================================
@@ -636,6 +663,11 @@ Write-Host "   git clone https://github.com/Tapiocapioca/claude-code-skills.git"
 Write-Host "   # Or copy the web-to-rag folder manually"
 Write-Host ""
 Write-Host "4. RESTART Claude Code to load the MCP servers"
+Write-Host ""
+Write-Host "AUTO-START CONFIGURATION:" -ForegroundColor Cyan
+Write-Host "   - Docker Desktop: starts automatically with Windows (minimized)"
+Write-Host "   - All containers: restart automatically when Docker starts"
+Write-Host "   - To disable: remove shortcut from Startup folder"
 Write-Host ""
 Write-Host "For detailed instructions, see:" -ForegroundColor Cyan
 Write-Host "https://github.com/Tapiocapioca/claude-code-skills/blob/master/skills/web-to-rag/PREREQUISITES.md"
