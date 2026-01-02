@@ -47,7 +47,9 @@ cp -r claude-code-skills/skills/web-to-rag ~/.claude/skills/
 
 | Skill | Description | Documentation |
 |-------|-------------|---------------|
-| **[web-to-rag](skills/web-to-rag/)** | Scrape websites, YouTube videos, PDFs and embed into local RAG | [README](skills/web-to-rag/README.md) |
+| **[web-to-rag](skills/web-to-rag/)** | Scrape websites, YouTube videos, PDFs and embed into local RAG | [README](skills/web-to-rag/README.md) • [Prerequisites](skills/web-to-rag/PREREQUISITES.md) |
+
+> 💡 **Free to test!** You can try `web-to-rag` without spending money using [iFlow Platform](https://platform.iflow.cn/en/models) as the LLM provider (free tier available).
 
 Each skill is **self-contained** with its own:
 - Prerequisites and installers
