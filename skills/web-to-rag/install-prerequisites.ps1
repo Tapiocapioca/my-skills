@@ -10,6 +10,7 @@
     - Git (if not present)
     - Node.js (for MCP servers)
     - Python (for utilities)
+    - Deno (JavaScript runtime for yt-dlp YouTube support)
     - Crawl4AI Docker container (web scraping)
     - AnythingLLM Docker container (local RAG)
     - yt-dlp-server Docker container (YouTube transcripts)
@@ -236,7 +237,7 @@ Write-Host @"
 Write-Host "This script will install:" -ForegroundColor White
 Write-Host "  - Chocolatey (package manager)"
 Write-Host "  - Docker Desktop"
-Write-Host "  - Git, Node.js, Python"
+Write-Host "  - Git, Node.js, Python, Deno"
 Write-Host "  - Crawl4AI container (web scraping)"
 Write-Host "  - AnythingLLM container (local RAG)"
 Write-Host "  - yt-dlp-server container (YouTube transcripts)"
@@ -320,7 +321,72 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
 }
 
 # =============================================================================
-# STEP 5: Install Docker Desktop
+# STEP 5: Install Deno (required for yt-dlp YouTube support)
+# =============================================================================
+Write-Step "Checking Deno..."
+
+if (Get-Command deno -ErrorAction SilentlyContinue) {
+    Write-OK "Deno already installed: $(deno --version | Select-Object -First 1)"
+} else {
+    Write-Warn "Installing Deno (required for yt-dlp YouTube support)..."
+
+    # Try winget first (preferred)
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        $exitCode = Invoke-Native { winget install --id=DenoLand.Deno --accept-package-agreements --accept-source-agreements }
+        if ($exitCode -eq 0) {
+            Update-PathEnvironment
+            Write-OK "Deno installed via winget"
+        } else {
+            Write-Warn "Winget install failed, trying Chocolatey..."
+            choco install deno -y
+            Update-PathEnvironment
+        }
+    } else {
+        # Fall back to Chocolatey
+        choco install deno -y
+        Update-PathEnvironment
+    }
+
+    # Verify installation
+    if (Get-Command deno -ErrorAction SilentlyContinue) {
+        Write-OK "Deno installed: $(deno --version | Select-Object -First 1)"
+    } else {
+        Write-Warn "Deno not in PATH. May require terminal restart."
+    }
+}
+
+# =============================================================================
+# STEP 5a: Configure yt-dlp for YouTube support
+# =============================================================================
+Write-Step "Configuring yt-dlp for YouTube support..."
+
+# yt-dlp requires --remote-components ejs:github to download the JS challenge solver
+$ytdlpConfigDir = "$env:APPDATA\yt-dlp"
+$ytdlpConfigFile = "$ytdlpConfigDir\config.txt"
+
+if (-not (Test-Path $ytdlpConfigDir)) {
+    New-Item -ItemType Directory -Path $ytdlpConfigDir -Force | Out-Null
+}
+
+# Check if config already has remote-components
+$needsConfig = $true
+if (Test-Path $ytdlpConfigFile) {
+    $existingConfig = Get-Content $ytdlpConfigFile -Raw
+    if ($existingConfig -match "remote-components") {
+        Write-OK "yt-dlp already configured with remote-components"
+        $needsConfig = $false
+    }
+}
+
+if ($needsConfig) {
+    # Add or create config with remote-components
+    Add-Content -Path $ytdlpConfigFile -Value "--remote-components ejs:github"
+    Write-OK "yt-dlp configured with --remote-components ejs:github"
+    Write-Host "  This enables the JavaScript challenge solver for YouTube downloads"
+}
+
+# =============================================================================
+# STEP 6: Install Docker Desktop
 # =============================================================================
 if (-not $SkipDocker) {
     Write-Step "Checking Docker..."
@@ -412,7 +478,7 @@ if (-not $SkipDocker) {
 }
 
 # =============================================================================
-# STEP 6: Pull Docker Containers
+# STEP 6a: Pull Docker Containers
 # =============================================================================
 if (-not $SkipDocker) {
     # Crawl4AI - uses Docker named volume for browser cache and data
@@ -464,6 +530,133 @@ if (-not $SkipDocker) {
     $tempDir = "$env:TEMP\claude-code-skills-temp"
     if (Test-Path $tempDir) {
         Remove-Item -Recurse -Force $tempDir
+    }
+}
+
+# =============================================================================
+# STEP 6b: Configure AnythingLLM (LLM + Embedding Provider)
+# =============================================================================
+if (-not $SkipDocker) {
+    Write-Step "AnythingLLM Configuration"
+    Write-Host ""
+    Write-Host "  AnythingLLM requires an LLM provider for chat and embeddings." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  RECOMMENDED FREE PROVIDER:" -ForegroundColor Green
+    Write-Host "    iFlow Platform: https://platform.iflow.cn/en/models" -ForegroundColor Green
+    Write-Host "    - Free tier available"
+    Write-Host "    - OpenAI-compatible API"
+    Write-Host "    - Supports many models including Claude, GPT, embeddings"
+    Write-Host ""
+    Write-Host "  OTHER OPTIONS:" -ForegroundColor Yellow
+    Write-Host "    - OpenAI: https://platform.openai.com/api-keys"
+    Write-Host "    - Anthropic: https://console.anthropic.com/"
+    Write-Host "    - OpenRouter: https://openrouter.ai/keys"
+    Write-Host "    - Any OpenAI-compatible provider"
+    Write-Host ""
+
+    $configureNow = Read-Host "Configure AnythingLLM now? (Y/n/skip)"
+
+    if ($configureNow -eq "skip" -or $configureNow -eq "s") {
+        Write-Warn "Skipping AnythingLLM configuration."
+        Write-Host "     You can configure it manually later at: http://localhost:3001"
+    } elseif ($configureNow -ne "n" -and $configureNow -ne "N") {
+
+        # Wait for AnythingLLM to be ready
+        Write-Host "  Waiting for AnythingLLM to be ready..."
+        $anythingllmReady = Test-ContainerHealth -Name "anythingllm" -HealthUrl "http://localhost:3001/api/health" -TimeoutSeconds 60
+
+        if (-not $anythingllmReady) {
+            Write-Err "AnythingLLM is not responding. Please configure manually later."
+        } else {
+            Write-Host ""
+            Write-Host "  Enter your provider details (leave empty to use defaults):" -ForegroundColor Cyan
+            Write-Host ""
+
+            # Collect configuration from user
+            Write-Host "  For iFlow (free tier), use: https://api.iflow.cn/v1" -ForegroundColor Gray
+            $apiBaseUrl = Read-Host "  API Base URL [default: https://api.iflow.cn/v1]"
+            if ([string]::IsNullOrWhiteSpace($apiBaseUrl)) { $apiBaseUrl = "https://api.iflow.cn/v1" }
+
+            $apiKey = Read-Host "  API Key (required)"
+            if ([string]::IsNullOrWhiteSpace($apiKey)) {
+                Write-Warn "API Key is required. Skipping configuration."
+            } else {
+                Write-Host "  For iFlow, try: glm-4.6, qwen3-max, deepseek-v3, kimi-k2, etc." -ForegroundColor Gray
+                $llmModel = Read-Host "  LLM Model [default: glm-4.6]"
+                if ([string]::IsNullOrWhiteSpace($llmModel)) { $llmModel = "glm-4.6" }
+
+                $contextWindow = Read-Host "  Context Window [default: 200000]"
+                if ([string]::IsNullOrWhiteSpace($contextWindow)) {
+                    $contextWindow = "200000"
+                } elseif (-not ($contextWindow -match '^\d+$')) {
+                    Write-Warn "Invalid context window, using default: 200000"
+                    $contextWindow = "200000"
+                }
+
+                $maxTokens = Read-Host "  Max Tokens [default: 8192]"
+                if ([string]::IsNullOrWhiteSpace($maxTokens)) {
+                    $maxTokens = "8192"
+                } elseif (-not ($maxTokens -match '^\d+$')) {
+                    Write-Warn "Invalid max tokens, using default: 8192"
+                    $maxTokens = "8192"
+                }
+
+                Write-Host ""
+                Write-Host "  Configuring AnythingLLM via API..." -ForegroundColor Cyan
+
+                # First, we need to complete the onboarding to get access to settings API
+                # AnythingLLM API for settings requires authentication after initial setup
+
+                try {
+                    # Configure LLM Provider
+                    $llmSettings = @{
+                        "LLMProvider" = "generic-openai"
+                        "GenericOpenAiBasePath" = $apiBaseUrl
+                        "GenericOpenAiKey" = $apiKey
+                        "GenericOpenAiModelPref" = $llmModel
+                        "GenericOpenAiTokenLimit" = [int]$contextWindow
+                        "GenericOpenAiMaxTokens" = [int]$maxTokens
+                    }
+
+                    $llmBody = $llmSettings | ConvertTo-Json
+                    $response = Invoke-RestMethod -Uri "http://localhost:3001/api/system/update-env" `
+                        -Method POST `
+                        -ContentType "application/json" `
+                        -Body $llmBody `
+                        -ErrorAction Stop
+
+                    if ($response.success -or $response.newValues) {
+                        Write-OK "LLM Provider configured (Generic OpenAI)"
+                    } else {
+                        Write-Warn "LLM configuration response: $($response | ConvertTo-Json -Compress)"
+                    }
+
+                    # Embedding uses built-in AnythingLLM Embedder (iFlow doesn't provide embeddings)
+                    # No configuration needed - it's the default
+
+                    Write-Host ""
+                    Write-OK "AnythingLLM configured successfully!"
+                    Write-Host "     LLM Model: $llmModel"
+                    Write-Host "     Context Window: $contextWindow"
+                    Write-Host "     Embedding: Built-in AnythingLLM Embedder (default)"
+                    Write-Host ""
+
+                } catch {
+                    Write-Warn "Could not configure AnythingLLM via API: $_"
+                    Write-Host ""
+                    Write-Host "  Please configure manually:" -ForegroundColor Yellow
+                    Write-Host "  1. Open: http://localhost:3001"
+                    Write-Host "  2. Complete the setup wizard"
+                    Write-Host "  3. Go to Settings > AI Providers > LLM"
+                    Write-Host "  4. Select 'Generic OpenAI' and enter your credentials"
+                    Write-Host "  5. Embedding: keep the default 'AnythingLLM Embedder'"
+                    Write-Host ""
+                }
+            }
+        }
+    } else {
+        Write-Warn "Skipping AnythingLLM configuration."
+        Write-Host "     You can configure it manually later at: http://localhost:3001"
     }
 }
 
@@ -766,7 +959,7 @@ Write-Host "   - Go to Settings > API Keys"
 Write-Host "   - Create an API key and copy it"
 Write-Host ""
 Write-Host "2. UPDATE MCP CONFIGURATION:" -ForegroundColor White
-Write-Host "   - Edit: $mcpConfigPath"
+Write-Host "   - Edit: $claudeJsonPath"
 Write-Host "   - Replace 'YOUR_API_KEY_HERE' with your AnythingLLM API key"
 Write-Host ""
 Write-Host "3. INSTALL THE SKILL:" -ForegroundColor White

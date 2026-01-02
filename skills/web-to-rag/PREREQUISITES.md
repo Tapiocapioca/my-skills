@@ -114,6 +114,7 @@ This means after a system reboot, Docker will start automatically and all contai
 
 | Tool | Purpose | Auto-installed |
 |------|---------|----------------|
+| **Deno** | JavaScript runtime for yt-dlp (YouTube support) | ✅ Yes |
 | **poppler (pdftotext)** | PDF text extraction | ✅ Yes |
 
 ### MCP Servers Source
@@ -248,15 +249,40 @@ Go to **Settings** (gear icon) → **LLM Preference**
 
 Choose one of these providers:
 
-| Provider | What You Need |
-|----------|---------------|
-| **OpenAI** | API Key from https://platform.openai.com/api-keys |
-| **Anthropic** | API Key from https://console.anthropic.com/ |
-| **Ollama** | Local Ollama installation (free, no API key) |
-| **Azure OpenAI** | Azure endpoint and key |
-| **OpenRouter** | API Key from https://openrouter.ai/keys |
+| Provider | What You Need | Cost |
+|----------|---------------|------|
+| **iFlow Platform** ⭐ | API Key from https://platform.iflow.cn/en/models | **Free tier** |
+| **OpenAI** | API Key from https://platform.openai.com/api-keys | Paid |
+| **Anthropic** | API Key from https://console.anthropic.com/ | Paid |
+| **OpenRouter** | API Key from https://openrouter.ai/keys | Pay per use |
+| **Ollama** | Local Ollama installation | Free (local) |
+| **Azure OpenAI** | Azure endpoint and key | Paid |
 
-**For Ollama (Free Option):**
+#### ⭐ Recommended: iFlow Platform (Free Tier)
+
+**iFlow** offers a free tier with access to many powerful LLM models. Perfect for getting started!
+
+**Available models include:**
+- `glm-4.6` - GLM-4.6 (200K context, 128K output) ⭐ Recommended
+- `qwen3-max` - Qwen3 Max (256K context)
+- `deepseek-v3` - DeepSeek V3 (128K context)
+- `kimi-k2` - Kimi K2 (128K context)
+- `deepseek-r1` - DeepSeek R1 reasoning model
+
+**Setup:**
+1. Sign up at: https://platform.iflow.cn/en/models
+2. Get your API key from the dashboard
+3. In AnythingLLM, select **"Generic OpenAI"**
+4. Configure:
+   - **Base URL**: `https://api.iflow.cn/v1`
+   - **API Key**: Your iFlow API key
+   - **Model**: `glm-4.6` (or another model from the list)
+   - **Context Window**: `200000` (for GLM-4.6)
+   - **Max Tokens**: `8192`
+
+> **Note:** iFlow provides LLM models only (no embeddings). Use the built-in "AnythingLLM Embedder" for embeddings.
+
+**For Ollama (Free, Local Option):**
 1. Install Ollama: https://ollama.ai
 2. Pull a model: `ollama pull llama2` or `ollama pull mistral`
 3. In AnythingLLM, select "Ollama" and enter: `http://host.docker.internal:11434`
@@ -265,9 +291,20 @@ Choose one of these providers:
 
 Go to **Settings** → **Embedding Preference**
 
-- For **OpenAI**: Use `text-embedding-ada-002`
-- For **Ollama**: Use `nomic-embed-text` (run `ollama pull nomic-embed-text` first)
-- For **Local**: Use the built-in "AnythingLLM Embedder"
+| Provider | Model | Notes |
+|----------|-------|-------|
+| **AnythingLLM Embedder** ⭐ | `all-MiniLM-L6-v2` | Built-in, no API key needed, works with any LLM |
+| **OpenAI** | `text-embedding-3-small` or `text-embedding-3-large` | Requires OpenAI API key |
+| **Ollama** | `nomic-embed-text` | Run `ollama pull nomic-embed-text` first |
+
+**Recommended: Use the built-in AnythingLLM Embedder**
+
+If you're using iFlow or another provider that doesn't offer embeddings, keep the default **"AnythingLLM Embedder"**. It works well and requires no additional configuration.
+
+**For OpenAI users:**
+1. Select **"OpenAI"** as embedding provider
+2. Enter your OpenAI API Key
+3. Model: `text-embedding-3-small` (faster) or `text-embedding-3-large` (better quality)
 
 ### Step 5: Create API Key
 
@@ -277,7 +314,7 @@ Go to **Settings** → **API Keys**
 2. Give it a name (e.g., "claude-code")
 3. **Copy the key** - you'll need it for the MCP configuration
 
-The key looks like: `TZZAC6K-Q8K4DJ6-NBP90YN-DY52YAQ`
+The key looks like: `XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX`
 
 ---
 
@@ -397,7 +434,25 @@ Ask Claude:
 You should see:
 - ✅ anythingllm
 - ✅ duckduckgo-search
+- ✅ yt-dlp
 - ✅ crawl4ai
+
+### Initialize AnythingLLM MCP
+
+The first time you use the AnythingLLM MCP server, you need to initialize it with your API key. Claude Code will do this automatically when you use the skill, but you can also do it manually:
+
+```
+Ask Claude: "Initialize AnythingLLM with my API key"
+```
+
+Or use the MCP tool directly:
+```
+mcp__anythingllm__initialize_anythingllm
+  apiKey: "YOUR_API_KEY"
+  baseUrl: "http://localhost:3001"
+```
+
+**Note:** The API key is configured in `~/.claude.json` (see [Configuring MCP Servers](#configuring-mcp-servers)), so initialization should happen automatically. Manual initialization is only needed if you see a "Client not initialized" error.
 
 ---
 
@@ -429,7 +484,7 @@ mcp__anythingllm__initialize_anythingllm
 
 ### MCP server not showing in Claude
 
-1. Check the path in `mcp_servers.json` is correct
+1. Check the path in `.claude.json` is correct
 2. Make sure `npm install` was run in each MCP directory
 3. Restart Claude Code
 
@@ -455,6 +510,53 @@ docker run -d --name anythingllm -p 3002:3001 ...
    ```bash
    ollama pull nomic-embed-text
    ```
+
+### yt-dlp JavaScript runtime warnings
+
+If you see warnings like:
+```
+WARNING: [youtube] No supported JavaScript runtime could be found
+WARNING: [youtube] [jsc] Remote components challenge solver script (deno) ... were skipped
+WARNING: [youtube] n challenge solving failed: Some formats may be missing
+```
+
+**This requires two things:**
+1. **Deno** must be installed (JavaScript runtime)
+2. **yt-dlp config** must enable the remote challenge solver
+
+Since November 2025, yt-dlp requires a JavaScript runtime (Deno) AND a challenge solver script to fully support YouTube downloads.
+
+**Fix Step 1 - Install Deno:**
+```powershell
+# Windows (PowerShell)
+winget install --id=DenoLand.Deno
+
+# Linux/macOS
+curl -fsSL https://deno.land/install.sh | sh
+```
+
+**Fix Step 2 - Configure yt-dlp:**
+```powershell
+# Windows - Create/update yt-dlp config
+mkdir "$env:APPDATA\yt-dlp" -Force
+Add-Content "$env:APPDATA\yt-dlp\config.txt" "--remote-components ejs:github"
+```
+
+```bash
+# Linux/macOS - Create/update yt-dlp config
+mkdir -p ~/.config/yt-dlp
+echo "--remote-components ejs:github" >> ~/.config/yt-dlp/config
+```
+
+After configuration, **restart your terminal** for changes to take effect.
+
+**Verify the fix:**
+```bash
+# Should show no warnings
+yt-dlp "ytsearch1:test" --print title --no-download
+```
+
+**Note:** The `install-prerequisites.ps1` script automatically installs Deno and configures yt-dlp.
 
 ---
 
