@@ -515,7 +515,19 @@ if (-not $SkipMCP) {
     Write-OK "    DuckDuckGo MCP Server installed"
 
     # 3. yt-dlp MCP Server (from Tapiocapioca's fork - Node.js)
+    #    IMPORTANT: Requires yt-dlp CLI tool to be installed!
     Write-Host "  [3/4] Installing yt-dlp MCP Server..."
+
+    # First, ensure yt-dlp CLI is installed (required dependency)
+    $ytdlpCli = Get-Command yt-dlp -ErrorAction SilentlyContinue
+    if (-not $ytdlpCli) {
+        Write-Host "    Installing yt-dlp CLI (required dependency)..."
+        $null = Invoke-Native { pip install yt-dlp }
+        Write-OK "    yt-dlp CLI installed"
+    } else {
+        Write-OK "    yt-dlp CLI already installed"
+    }
+
     $ytdlpMcpDir = "$mcpDir\yt-dlp-mcp"
 
     if (Test-Path $ytdlpMcpDir) {
