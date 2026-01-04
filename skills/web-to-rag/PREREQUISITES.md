@@ -28,7 +28,18 @@ cd skills/web-to-rag
 # Or download and run directly:
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tapiocapioca/claude-code-skills/master/skills/web-to-rag/install-prerequisites.ps1" -OutFile "install-prerequisites.ps1"
 .\install-prerequisites.ps1
+
+# For automated installation with auto-restart (useful for VMs):
+.\install-prerequisites.ps1 -Unattended
 ```
+
+**What the script does:**
+- Installs all prerequisites (Chocolatey, Docker, Node.js v22, Python 3.12, Deno, ffmpeg)
+- Handles multiple reboots automatically (Hyper-V and Docker require restarts)
+- Downloads Docker images with progress indication
+- Generates AnythingLLM API key via Playwright browser automation
+- Configures 4 MCP servers in `~/.claude.json`
+- Sets up Docker Desktop auto-start
 
 ### Linux/macOS
 
@@ -52,6 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/Tapiocapioca/claude-code-skills/mas
 | **AnythingLLM** | Local RAG system | 3001 |
 | **yt-dlp-server** | YouTube transcript extraction | 8501 |
 | **whisper-server** | Audio transcription (Whisper) | 8502 |
+| **Playwright** | Browser automation (for AnythingLLM API key generation) | - |
 | **AnythingLLM MCP Server** | Claude ↔ AnythingLLM bridge | - |
 | **DuckDuckGo MCP Server** | Web search for Claude | - |
 | **yt-dlp MCP Server** | YouTube info for Claude | - |
@@ -115,7 +127,9 @@ This means after a system reboot, Docker will start automatically and all contai
 | Tool | Purpose | Auto-installed |
 |------|---------|----------------|
 | **Deno** | JavaScript runtime for yt-dlp (YouTube support) | ✅ Yes |
+| **ffmpeg** | Video/audio processing for yt-dlp | ✅ Yes |
 | **poppler (pdftotext)** | PDF text extraction | ✅ Yes |
+| **Playwright** | Browser automation for API key generation | ✅ Yes (local installation) |
 
 ### MCP Servers Source
 
@@ -323,6 +337,8 @@ Go to **Settings** → **API Keys**
 
 The key looks like: `XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX`
 
+> **Note:** The `install-prerequisites.ps1` script automatically generates an API key using Playwright browser automation. If the automation succeeds, the key will already be configured in `~/.claude.json`. Check your configuration file before generating a key manually.
+
 ---
 
 ## Configuring MCP Servers
@@ -410,10 +426,12 @@ Expected: `{"status":"ok"}`
 ### Check AnythingLLM
 
 ```bash
-curl http://localhost:3001/api/health
+curl http://localhost:3001/api/ping
 ```
 
-Expected: `{"ok":true}`
+Expected: `{"online":true}`
+
+> **Note:** AnythingLLM uses `/api/ping` for health checks, not `/api/health`.
 
 ### Check yt-dlp-server
 
@@ -464,6 +482,33 @@ mcp__anythingllm__initialize_anythingllm
 ---
 
 ## Troubleshooting
+
+### Docker Desktop Won't Start in Hyper-V VM
+
+**Symptom:** Docker Desktop fails to start with errors like "WSL 2 installation is incomplete" or hangs during startup.
+
+**Cause:** Nested virtualization is not enabled on the Hyper-V HOST.
+
+**Solution:**
+
+1. **Shut down the VM** (from Hyper-V HOST):
+   ```powershell
+   Stop-VM -Name '<VMName>' -Force
+   ```
+
+2. **Enable nested virtualization** (from Hyper-V HOST):
+   ```powershell
+   Set-VMProcessor -VMName '<VMName>' -ExposeVirtualizationExtensions $true
+   ```
+
+3. **Start the VM**:
+   ```powershell
+   Start-VM -Name '<VMName>'
+   ```
+
+4. **Re-run the installer** inside the VM
+
+> **Note:** The `install-prerequisites.ps1` script automatically detects Hyper-V VMs and installs Docker with the correct backend. However, it cannot enable nested virtualization from inside the VM - this MUST be done on the HOST.
 
 ### Docker containers not starting
 

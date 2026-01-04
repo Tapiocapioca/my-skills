@@ -28,7 +28,8 @@
 param(
     [switch]$SkipDocker,
     [switch]$SkipMCP,
-    [switch]$Verbose
+    [switch]$Verbose,
+    [switch]$Unattended  # For automated installation with auto-restart
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,6 +62,195 @@ function Invoke-Native {
         return $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $oldPref
+    }
+}
+
+# Detect hypervisor type (returns "HyperV", "VMware", "VirtualBox", "Unknown", or $null if not in VM)
+function Get-HypervisorType {
+    try {
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        $manufacturer = $computerSystem.Manufacturer
+        $model = $computerSystem.Model
+
+        # Check for Hyper-V
+        if ($manufacturer -match "Microsoft Corporation" -and $model -match "Virtual Machine") {
+            return "HyperV"
+        }
+
+        # Check for VMware
+        if ($manufacturer -match "VMware" -or $model -match "VMware") {
+            return "VMware"
+        }
+
+        # Check for VirtualBox
+        if ($manufacturer -match "innotek" -or $model -match "VirtualBox") {
+            return "VirtualBox"
+        }
+
+        # Additional check via BIOS
+        $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue
+        if ($bios) {
+            if ($bios.Manufacturer -match "VMware" -or $bios.Version -match "VMware") {
+                return "VMware"
+            }
+            if ($bios.Manufacturer -match "innotek" -or $bios.Version -match "VirtualBox") {
+                return "VirtualBox"
+            }
+        }
+
+        # Check if running in any VM (but can't determine type)
+        if ($computerSystem.Model -match "Virtual" -or $manufacturer -match "Virtual") {
+            return "Unknown"
+        }
+
+        # Not running in a VM
+        return $null
+    }
+    catch {
+        Write-Warn "Could not detect virtualization status: $_"
+        return $null
+    }
+}
+
+# Legacy function for backward compatibility
+function Test-IsHyperVGuest {
+    $hypervisor = Get-HypervisorType
+    return ($hypervisor -eq "HyperV")
+}
+
+# State management for handling reboots
+$StateFile = "C:\Temp\install-prerequisites-state.txt"
+$ModeFile = "C:\Temp\install-prerequisites-mode.txt"
+
+function Save-InstallState {
+    param(
+        [string]$State,
+        [bool]$IsUnattended = $false
+    )
+    if (-not (Test-Path "C:\Temp")) {
+        New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null
+    }
+    Set-Content -Path $StateFile -Value $State -Force
+    Set-Content -Path $ModeFile -Value $IsUnattended.ToString() -Force
+    Write-Host "  State saved: $State (Unattended: $IsUnattended)" -ForegroundColor Gray
+}
+
+function Get-InstallState {
+    if (Test-Path $StateFile) {
+        $state = Get-Content $StateFile -Raw
+        return $state.Trim()
+    }
+    return $null
+}
+
+function Get-SavedMode {
+    if (Test-Path $ModeFile) {
+        $mode = Get-Content $ModeFile -Raw
+        return [System.Convert]::ToBoolean($mode.Trim())
+    }
+    return $false
+}
+
+function Clear-InstallState {
+    if (Test-Path $StateFile) {
+        Remove-Item $StateFile -Force
+        Write-Host "  State cleared" -ForegroundColor Gray
+    }
+    if (Test-Path $ModeFile) {
+        Remove-Item $ModeFile -Force
+    }
+}
+
+function Register-AutoRestartTask {
+    param(
+        [string]$ScriptPath,
+        [bool]$IsUnattended = $false
+    )
+
+    $taskName = "Install Prerequisites Auto-Resume"
+    $taskFolder = "PrerequisitesInstallation"
+
+    try {
+        # Create custom folder using COM object (like the reference script)
+        $Sched = New-Object -ComObject Schedule.Service
+        $Sched.Connect()
+        $Root = $Sched.GetFolder("\")
+
+        # Remove existing folder and tasks if present
+        try {
+            $TargetFolder = $Root.GetFolder($taskFolder)
+            $TargetFolder.GetTasks(0) | ForEach-Object { $TargetFolder.DeleteTask($_.Name, 0) }
+            $Root.DeleteFolder($taskFolder, 0)
+        } catch {
+            # Folder doesn't exist, ignore
+        }
+
+        # Create new folder
+        $null = $Root.CreateFolder($taskFolder, $null)
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($Sched) | Out-Null
+        [System.GC]::Collect()
+    }
+    catch {
+        Write-Warn "Could not create task folder: $_"
+        # Continue anyway, will use root folder
+        $taskFolder = ""
+    }
+
+    # Build arguments based on mode
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    if ($IsUnattended) {
+        $arguments += " -Unattended"
+    }
+
+    # Create task components
+    $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument $arguments
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+
+    if ($IsUnattended) {
+        # Unattended mode: run as SYSTEM at startup (no window needed)
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    } else {
+        # Manual mode: run as current user at logon (interactive window)
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    }
+
+    # Register the task
+    $fullTaskName = if ($taskFolder) { "\$taskFolder\$taskName" } else { $taskName }
+    Register-ScheduledTask -TaskName $fullTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Auto-resume installation after reboot" -Force | Out-Null
+
+    $mode = if ($IsUnattended) { "Unattended" } else { "Manual" }
+    Write-Host "  Auto-restart task registered ($mode mode)" -ForegroundColor Gray
+}
+
+function Unregister-AutoRestartTask {
+    $taskFolder = "PrerequisitesInstallation"
+
+    try {
+        # Use COM object to remove entire folder and all tasks (like reference script)
+        $Sched = New-Object -ComObject Schedule.Service
+        $Sched.Connect()
+        $Root = $Sched.GetFolder("\")
+
+        try {
+            $TargetFolder = $Root.GetFolder($taskFolder)
+            # Delete all tasks in folder
+            $TargetFolder.GetTasks(0) | ForEach-Object { $TargetFolder.DeleteTask($_.Name, 0) }
+            # Delete folder itself
+            $Root.DeleteFolder($taskFolder, 0)
+            Write-Host "  Auto-restart task and folder removed" -ForegroundColor Gray
+        }
+        catch {
+            # Folder doesn't exist, already clean
+        }
+        finally {
+            if ($Sched) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($Sched) | Out-Null }
+            [System.GC]::Collect()
+        }
+    }
+    catch {
+        Write-Warn "Could not remove task folder: $_"
     }
 }
 
@@ -248,14 +438,36 @@ Write-Host "IMPORTANT: After installation, you must configure AnythingLLM" -Fore
 Write-Host "           with your LLM provider API key (OpenAI, Anthropic, etc.)" -ForegroundColor Yellow
 Write-Host ""
 
-$confirm = Read-Host "Continue? (Y/n)"
-if ($confirm -eq "n" -or $confirm -eq "N") {
-    Write-Host "Installation cancelled."
-    exit 0
+if (-not $Unattended) {
+    $confirm = Read-Host "Continue? (Y/n)"
+    if ($confirm -eq "n" -or $confirm -eq "N") {
+        Write-Host "Installation cancelled."
+        exit 0
+    }
 }
 
 # =============================================================================
-# STEP 1: Install Chocolatey
+# STATE MANAGEMENT: Handle resumption after reboots
+# =============================================================================
+$currentState = Get-InstallState
+
+if ($currentState) {
+    # Restore saved mode (unattended or manual)
+    $savedMode = Get-SavedMode
+    $Unattended = $savedMode
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host " RESUMING INSTALLATION" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "Previous state: $currentState" -ForegroundColor Gray
+    $modeText = if ($Unattended) { "Unattended" } else { "Manual" }
+    Write-Host "Mode: $modeText" -ForegroundColor Gray
+    Write-Host ""
+}
+
+# =============================================================================
+# STEP 0: Install Chocolatey (required for all other installations)
 # =============================================================================
 Write-Step "Checking Chocolatey..."
 
@@ -275,6 +487,161 @@ if (Get-Command choco -ErrorAction SilentlyContinue) {
     } else {
         Write-Err "Failed to install Chocolatey"
         exit 1
+    }
+}
+
+# Check if running in a VM and detect hypervisor type
+$hypervisorType = Get-HypervisorType
+$isHyperVGuest = ($hypervisorType -eq "HyperV")
+$isInVM = ($null -ne $hypervisorType)
+
+# =============================================================================
+# STEP 1: Enable Hyper-V features if in VM (required before Docker install)
+# =============================================================================
+if ($isHyperVGuest -and $currentState -ne "AFTER_HYPERV_REBOOT" -and $currentState -ne "DOCKER_INSTALLED") {
+    Write-Step "Checking Hyper-V features (required for nested virtualization)..."
+
+    $hypervFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue
+
+    if ($hypervFeature -and $hypervFeature.State -eq "Enabled") {
+        Write-OK "Hyper-V features already enabled"
+
+        # Note: We don't check VirtualizationFirmwareEnabled here because:
+        # - ExposeVirtualizationExtensions must be set on the HOST, not in the guest
+        # - The guest OS may not report it correctly even when properly configured
+        # - Docker will fail later with a clear error if nested virt isn't working
+        # So we skip this check and let Docker validate the configuration instead.
+        $skipNestedVirtCheck = $true
+        if ($false) {  # Disabled check - keeping code for reference
+            # Old check that was too strict:
+            $cpuInfo = Get-CimInstance -ClassName Win32_Processor
+            if ($cpuInfo.VirtualizationFirmwareEnabled -eq $false) {
+            Write-Host ""
+            Write-Host "========================================" -ForegroundColor Red
+            Write-Host " ERROR: NESTED VIRTUALIZATION NOT ENABLED" -ForegroundColor Red
+            Write-Host "========================================" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "Docker Desktop requires nested virtualization, but it is not enabled." -ForegroundColor Yellow
+            Write-Host "Detected hypervisor: $hypervisorType" -ForegroundColor Cyan
+            Write-Host ""
+
+            # Provide hypervisor-specific instructions
+            switch ($hypervisorType) {
+                "HyperV" {
+                    Write-Host "SOLUTION FOR HYPER-V:" -ForegroundColor Cyan
+                    Write-Host "  This MUST be enabled on the Hyper-V HOST (not inside this VM)." -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Host "  1. On the Hyper-V HOST machine, open PowerShell as Administrator" -ForegroundColor White
+                    Write-Host "  2. Run this command to stop this VM:" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "     Stop-VM -Name '<VMName>' -Force" -ForegroundColor Green
+                    Write-Host ""
+                    Write-Host "  3. Run this command to enable nested virtualization:" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "     Set-VMProcessor -VMName '<VMName>' -ExposeVirtualizationExtensions `$true" -ForegroundColor Green
+                    Write-Host ""
+                    Write-Host "  4. Start the VM again:" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "     Start-VM -Name '<VMName>'" -ForegroundColor Green
+                    Write-Host ""
+                    Write-Host "  5. Re-run this installation script" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "Replace <VMName> with the actual name of this virtual machine." -ForegroundColor Gray
+                    Write-Host ""
+                    Write-Host "For more information, see:" -ForegroundColor Cyan
+                    Write-Host "https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/enable-nested-virtualization" -ForegroundColor Blue
+                }
+                "VMware" {
+                    Write-Host "SOLUTION FOR VMWARE:" -ForegroundColor Cyan
+                    Write-Host "  This MUST be enabled on the VMware HOST (not inside this VM)." -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Host "METHOD 1 - VMware Workstation/Fusion GUI:" -ForegroundColor White
+                    Write-Host "  1. Shut down this VM completely" -ForegroundColor White
+                    Write-Host "  2. In VMware, select this VM and go to: VM > Settings > Processors" -ForegroundColor White
+                    Write-Host "  3. Enable 'Virtualize Intel VT-x/EPT or AMD-V/RVI'" -ForegroundColor Green
+                    Write-Host "  4. Click OK and start the VM" -ForegroundColor White
+                    Write-Host "  5. Re-run this installation script" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "METHOD 2 - Edit .vmx file manually:" -ForegroundColor White
+                    Write-Host "  1. Shut down this VM completely" -ForegroundColor White
+                    Write-Host "  2. Locate the VM's .vmx file and open it in a text editor" -ForegroundColor White
+                    Write-Host "  3. Add or modify these lines:" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "     vhv.enable = `"TRUE`"" -ForegroundColor Green
+                    Write-Host "     hypervisor.cpuid.v0 = `"FALSE`"" -ForegroundColor Green
+                    Write-Host ""
+                    Write-Host "  4. Save the file and start the VM" -ForegroundColor White
+                    Write-Host "  5. Re-run this installation script" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "For more information, see:" -ForegroundColor Cyan
+                    Write-Host "https://docs.vmware.com/en/VMware-Workstation-Pro/17/com.vmware.ws.using.doc/GUID-2E98C9C5-C5D1-4060-87D3-5EA4E4E5D4B1.html" -ForegroundColor Blue
+                }
+                "VirtualBox" {
+                    Write-Host "SOLUTION FOR VIRTUALBOX:" -ForegroundColor Cyan
+                    Write-Host "  This MUST be enabled on the VirtualBox HOST (not inside this VM)." -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Host "  1. Shut down this VM completely" -ForegroundColor White
+                    Write-Host "  2. In VirtualBox Manager, select this VM" -ForegroundColor White
+                    Write-Host "  3. Go to: Settings > System > Processor" -ForegroundColor White
+                    Write-Host "  4. Enable 'Enable Nested VT-x/AMD-V'" -ForegroundColor Green
+                    Write-Host "  5. Click OK and start the VM" -ForegroundColor White
+                    Write-Host "  6. Re-run this installation script" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "For more information, see:" -ForegroundColor Cyan
+                    Write-Host "https://docs.oracle.com/en/virtualization/virtualbox/6.0/admin/nested-virt.html" -ForegroundColor Blue
+                }
+                default {
+                    Write-Host "SOLUTION FOR UNKNOWN HYPERVISOR:" -ForegroundColor Cyan
+                    Write-Host "  Unable to detect specific hypervisor type." -ForegroundColor Yellow
+                    Write-Host "  Please consult your virtualization platform's documentation for:" -ForegroundColor White
+                    Write-Host "  - How to enable nested virtualization" -ForegroundColor White
+                    Write-Host "  - How to expose VT-x/AMD-V to guest VMs" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "Common search terms:" -ForegroundColor Cyan
+                    Write-Host "  'nested virtualization <your hypervisor name>'" -ForegroundColor Gray
+                    Write-Host "  'expose VT-x to guest <your hypervisor name>'" -ForegroundColor Gray
+                }
+            }
+
+            Write-Host ""
+            exit 1
+            }  # End of if ($cpuInfo.VirtualizationFirmwareEnabled -eq $false)
+        }  # End of if ($false) - disabled check
+    } else {
+        Write-Warn "Enabling Hyper-V features for Docker Desktop..."
+        Write-Host "  This requires nested virtualization to be enabled on the VM" -ForegroundColor Yellow
+
+        # Enable Hyper-V and related features
+        Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -NoRestart -WarningAction SilentlyContinue | Out-Null
+
+        Write-OK "Hyper-V features enabled"
+
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Yellow
+        Write-Host " REBOOT REQUIRED" -ForegroundColor Yellow
+        Write-Host "========================================" -ForegroundColor Yellow
+        Write-Host "Hyper-V features have been enabled." -ForegroundColor Gray
+        Write-Host "A restart is required before continuing." -ForegroundColor Gray
+        Write-Host ""
+
+        if ($Unattended) {
+            Save-InstallState "AFTER_HYPERV_REBOOT" -IsUnattended $true
+            Register-AutoRestartTask -ScriptPath $PSCommandPath -IsUnattended $true
+            Write-OK "Auto-restart configured. Rebooting in 5 seconds..."
+            Start-Sleep -Seconds 5
+            Restart-Computer -Force
+        } else {
+            Save-InstallState "AFTER_HYPERV_REBOOT" -IsUnattended $false
+            $restart = Read-Host "Restart now? (Y/n)"
+            if ($restart -ne "n" -and $restart -ne "N") {
+                Register-AutoRestartTask -ScriptPath $PSCommandPath -IsUnattended $false
+                Restart-Computer -Force
+            } else {
+                Write-Host "Please restart manually and re-run this script." -ForegroundColor Yellow
+                exit 0
+            }
+        }
+        exit 0
     }
 }
 
@@ -300,10 +667,13 @@ Write-Step "Checking Node.js..."
 if (Get-Command node -ErrorAction SilentlyContinue) {
     Write-OK "Node.js already installed: $(node --version)"
 } else {
-    Write-Warn "Installing Node.js LTS..."
-    choco install nodejs-lts -y
+    Write-Warn "Installing Node.js v22 LTS (Jod - recommended stable version)..."
+    # Install Node.js v22 (Active LTS) for maximum stability and compatibility
+    # v22 is more mature than v24 and has better ecosystem support
+    # Using latest v22.x available on Chocolatey
+    choco install nodejs-lts --version=22.21.1 -y
     Update-PathEnvironment
-    Write-OK "Node.js installed"
+    Write-OK "Node.js v22 LTS installed"
 }
 
 # =============================================================================
@@ -311,13 +681,29 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 # =============================================================================
 Write-Step "Checking Python..."
 
-if (Get-Command python -ErrorAction SilentlyContinue) {
-    Write-OK "Python already installed: $(python --version)"
-} else {
-    Write-Warn "Installing Python..."
-    choco install python -y
+# Check if Python is installed via Chocolatey (not the Windows Store stub)
+$pythonInstalled = $false
+# Check for both generic 'python' and version-specific packages (e.g., python312)
+$chocoList = choco list --local-only 2>&1
+if ($chocoList -match "python312" -or $chocoList -match "^python\s") {
+    # Verify real Python exists
+    $pythonPaths = @(
+        (Get-ChildItem C:\ -Filter "Python*" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName "python.exe") })
+    )
+    if ($pythonPaths.Count -gt 0) {
+        $pythonExe = Join-Path $pythonPaths[0].FullName "python.exe"
+        $version = & $pythonExe --version 2>&1
+        Write-OK "Python already installed: $version"
+        $pythonInstalled = $true
+    }
+}
+
+if (-not $pythonInstalled) {
+    Write-Warn "Installing Python 3.12 (recommended stable version)..."
+    # Install Python 3.12.x for maximum stability and compatibility with MCP SDK
+    choco install python312 -y
     Update-PathEnvironment
-    Write-OK "Python installed"
+    Write-OK "Python 3.12 installed"
 }
 
 # =============================================================================
@@ -328,9 +714,11 @@ Write-Step "Checking Deno..."
 if (Get-Command deno -ErrorAction SilentlyContinue) {
     Write-OK "Deno already installed: $(deno --version | Select-Object -First 1)"
 } else {
-    Write-Warn "Installing Deno (required for yt-dlp YouTube support)..."
+    Write-Warn "Installing Deno v2.1+ LTS (required for yt-dlp YouTube support)..."
+    # Install Deno 2.1+ which has LTS support (6 months of bug fixes)
+    # LTS provides stability for production use
 
-    # Try winget first (preferred)
+    # Try winget first (preferred) - winget handles version management better
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         $exitCode = Invoke-Native { winget install --id=DenoLand.Deno --accept-package-agreements --accept-source-agreements }
         if ($exitCode -eq 0) {
@@ -338,12 +726,13 @@ if (Get-Command deno -ErrorAction SilentlyContinue) {
             Write-OK "Deno installed via winget"
         } else {
             Write-Warn "Winget install failed, trying Chocolatey..."
-            choco install deno -y
+            # Pin to Deno 2.x for LTS support
+            choco install deno --version=2.1.4 -y
             Update-PathEnvironment
         }
     } else {
-        # Fall back to Chocolatey
-        choco install deno -y
+        # Fall back to Chocolatey with version pin
+        choco install deno --version=2.1.4 -y
         Update-PathEnvironment
     }
 
@@ -391,6 +780,33 @@ if ($needsConfig) {
 if (-not $SkipDocker) {
     Write-Step "Checking Docker..."
 
+    # Check if we need to add Users group to docker-users (after reboot)
+    $dockerUserFile = "C:\Temp\add-docker-user.txt"
+    if (Test-Path $dockerUserFile) {
+        $savedMember = Get-Content $dockerUserFile -Raw
+        $savedMember = $savedMember.Trim()
+        Write-Host "  Checking docker-users group membership for '$savedMember'..." -ForegroundColor Gray
+        try {
+            $groupExists = Get-LocalGroup -Name "docker-users" -ErrorAction SilentlyContinue
+            if ($groupExists) {
+                $isMember = Get-LocalGroupMember -Group "docker-users" -Member $savedMember -ErrorAction SilentlyContinue
+                if (-not $isMember) {
+                    Add-LocalGroupMember -Group "docker-users" -Member $savedMember -ErrorAction Stop
+                    if ($savedMember -eq "Users") {
+                        Write-OK "Users group added to docker-users (all users can now use Docker)"
+                    } else {
+                        Write-OK "'$savedMember' added to docker-users group"
+                    }
+                } else {
+                    Write-OK "'$savedMember' already in docker-users group"
+                }
+                Remove-Item $dockerUserFile -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            Write-Warn "Could not add '$savedMember' to docker-users group: $_"
+        }
+    }
+
     if (Get-Command docker -ErrorAction SilentlyContinue) {
         Write-OK "Docker already installed"
 
@@ -400,10 +816,19 @@ if (-not $SkipDocker) {
             Write-OK "Docker daemon is running"
         } else {
             Write-Warn "Docker is installed but not running. Starting Docker Desktop..."
+
+            # Kill any docker-mcp processes that might interfere with Docker Desktop startup
+            Write-Host "  Checking for docker-mcp processes..." -ForegroundColor Gray
+            Get-Process -Name "docker-mcp" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*docker-mcp*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+
+            # If we just installed Docker (DOCKER_INSTALLED state), give it extra time
+            $maxWait = if ($currentState -eq "DOCKER_INSTALLED") { 120 } else { 90 }
+
             Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
 
             # Wait for Docker daemon with polling
-            $maxWait = 90
             $elapsed = 0
             $interval = 5
             Write-Host "  Waiting for Docker daemon (up to ${maxWait}s)..."
@@ -423,28 +848,95 @@ if (-not $SkipDocker) {
 
             if (-not $dockerReady) {
                 Write-Err "Docker daemon failed to start after ${maxWait}s"
-                Write-Host "     Please start Docker Desktop manually and re-run script"
+
+                if ($isHyperVGuest) {
+                    Write-Host ""
+                    Write-Host "TROUBLESHOOTING FOR HYPER-V VM:" -ForegroundColor Yellow
+                    Write-Host "  1. Ensure nested virtualization is enabled on the host:" -ForegroundColor Gray
+                    Write-Host "     Set-VMProcessor -VMName 'YourVM' -ExposeVirtualizationExtensions `$true" -ForegroundColor Gray
+                    Write-Host "  2. VM must be powered off before enabling nested virtualization" -ForegroundColor Gray
+                    Write-Host "  3. Check Docker Desktop logs in: %LOCALAPPDATA%\Docker\log\" -ForegroundColor Gray
+                    Write-Host ""
+                }
+
+                Write-Host "Please troubleshoot Docker Desktop and re-run this script" -ForegroundColor Yellow
                 exit 1
             }
         }
     } else {
         Write-Warn "Installing Docker Desktop..."
-        choco install docker-desktop -y
+
+        # Detect if running in Hyper-V VM and choose appropriate backend
+        $isHyperVGuest = Test-IsHyperVGuest
+
+        if ($isHyperVGuest) {
+            Write-Host "  Detected Hyper-V virtual machine" -ForegroundColor Cyan
+            Write-Host "  Installing with Hyper-V backend (nested virtualization required)" -ForegroundColor Gray
+
+            # Install Docker Desktop with Hyper-V backend
+            # Note: Requires nested virtualization to be enabled on the VM
+            choco install docker-desktop -y --install-arguments="'--backend=hyper-v --always-run-service'"
+        } else {
+            Write-Host "  Detected physical machine" -ForegroundColor Cyan
+            Write-Host "  Installing with WSL 2 backend (default)" -ForegroundColor Gray
+
+            # Install Docker Desktop with default WSL 2 backend and auto-start
+            choco install docker-desktop -y --install-arguments="'--always-run-service'"
+        }
+
+        # Stop Docker Desktop if it auto-started (it will start properly after reboot)
+        Write-Host "  Stopping Docker Desktop if running..." -ForegroundColor Gray
+        Get-Process "Docker Desktop" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+
+        # Add all users to docker-users group to avoid "Access is denied" error
+        Write-Host "  Adding all users to docker-users group..." -ForegroundColor Gray
+        try {
+            # Check if docker-users group exists (created by Docker Desktop installer)
+            $groupExists = Get-LocalGroup -Name "docker-users" -ErrorAction SilentlyContinue
+            if ($groupExists) {
+                # Check if Users group is already a member
+                $isMember = Get-LocalGroupMember -Group "docker-users" -Member "Users" -ErrorAction SilentlyContinue
+                if (-not $isMember) {
+                    Add-LocalGroupMember -Group "docker-users" -Member "Users" -ErrorAction Stop
+                    Write-OK "Users group added to docker-users (all users can now use Docker)"
+                } else {
+                    Write-OK "Users group already in docker-users"
+                }
+            } else {
+                Write-Warn "docker-users group not found yet (will be created after reboot)"
+                # Save a flag to add Users group after reboot
+                Set-Content -Path "C:\Temp\add-docker-user.txt" -Value "Users" -Force
+            }
+        } catch {
+            Write-Warn "Could not add Users group to docker-users: $_"
+            Write-Host "  You may need to run: net localgroup docker-users Users /add" -ForegroundColor Yellow
+        }
 
         Write-Host ""
         Write-Host "========================================" -ForegroundColor Yellow
         Write-Host " IMPORTANT: Docker Desktop Installed" -ForegroundColor Yellow
         Write-Host "========================================" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "1. You may need to RESTART your computer"
-        Write-Host "2. After restart, open Docker Desktop"
-        Write-Host "3. Complete the Docker setup wizard"
-        Write-Host "4. Re-run this script to continue installation"
+        Write-Host "A restart is required to complete Docker installation." -ForegroundColor Gray
         Write-Host ""
 
-        $restart = Read-Host "Restart now? (Y/n)"
-        if ($restart -ne "n" -and $restart -ne "N") {
+        if ($Unattended) {
+            Save-InstallState "DOCKER_INSTALLED" -IsUnattended $true
+            Register-AutoRestartTask -ScriptPath $PSCommandPath -IsUnattended $true
+            Write-OK "Auto-restart configured. Rebooting in 5 seconds..."
+            Start-Sleep -Seconds 5
             Restart-Computer -Force
+        } else {
+            Save-InstallState "DOCKER_INSTALLED" -IsUnattended $false
+            $restart = Read-Host "Restart now? (Y/n)"
+            if ($restart -ne "n" -and $restart -ne "N") {
+                Register-AutoRestartTask -ScriptPath $PSCommandPath -IsUnattended $false
+                Restart-Computer -Force
+            } else {
+                Write-Host "Please restart manually and re-run this script." -ForegroundColor Yellow
+                exit 0
+            }
         }
         exit 0
     }
@@ -481,6 +973,33 @@ if (-not $SkipDocker) {
 # STEP 6a: Pull Docker Containers
 # =============================================================================
 if (-not $SkipDocker) {
+    # Ensure Docker daemon is ready before creating containers
+    Write-Step "Ensuring Docker daemon is ready..."
+    $maxRetries = 30
+    $retryCount = 0
+    $dockerReady = $false
+
+    while ($retryCount -lt $maxRetries) {
+        $exitCode = Invoke-Native { docker info }
+        if ($exitCode -eq 0) {
+            Write-OK "Docker daemon is ready"
+            $dockerReady = $true
+            break
+        }
+
+        $retryCount++
+        if ($retryCount -lt $maxRetries) {
+            Write-Host "  Docker not ready yet, waiting... ($retryCount/$maxRetries)" -ForegroundColor Gray
+            Start-Sleep -Seconds 2
+        }
+    }
+
+    if (-not $dockerReady) {
+        Write-Err "Docker daemon failed to become ready after $maxRetries attempts"
+        Write-Host "  Try restarting Docker Desktop manually and re-run this script" -ForegroundColor Yellow
+        exit 1
+    }
+
     # Crawl4AI - uses Docker named volume for browser cache and data
     Install-DockerContainer `
         -Name "crawl4ai" `
@@ -984,3 +1503,7 @@ Write-Host ""
 Write-Host "For detailed instructions, see:" -ForegroundColor Cyan
 Write-Host "https://github.com/Tapiocapioca/claude-code-skills/blob/master/skills/web-to-rag/PREREQUISITES.md"
 Write-Host ""
+
+# Clean up installation state and scheduled task
+Clear-InstallState
+Unregister-AutoRestartTask

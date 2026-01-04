@@ -55,6 +55,118 @@ detect_os() {
     echo $OS
 }
 
+# =============================================================================
+# Docker Container Helper Functions
+# =============================================================================
+
+# Check if container exists (created, running or stopped)
+container_exists() {
+    local name=$1
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${name}$"
+}
+
+# Check if container is currently running
+container_running() {
+    local name=$1
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${name}$"
+}
+
+# Start container if stopped (idempotent)
+start_container_if_stopped() {
+    local name=$1
+    if container_exists "$name" && ! container_running "$name"; then
+        warn "Starting $name container..."
+        docker start "$name" >/dev/null 2>&1
+    fi
+}
+
+# Poll container health endpoint with timeout
+test_container_health() {
+    local name=$1
+    local url=$2
+    local max_attempts=${3:-30}
+    local interval=${4:-2}
+
+    local attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -sf "$url" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep $interval
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+# Pull Docker image with visible progress
+pull_docker_image() {
+    local image=$1
+    local image_name=$(echo "$image" | cut -d: -f1)
+
+    # Check if image already exists locally
+    if docker images -q "$image" 2>/dev/null | grep -q .; then
+        ok "Image $image already available locally"
+        return 0
+    fi
+
+    warn "Pulling $image from Docker Hub (this may take 5-10 minutes)..."
+    echo "  Progress will be shown below. Please wait..."
+
+    # Pull with visible progress (don't suppress output)
+    if docker pull "$image"; then
+        ok "$image pulled successfully"
+        return 0
+    else
+        err "Failed to pull image $image"
+        return 1
+    fi
+}
+
+# Unified container installation function
+install_docker_container() {
+    local name=$1
+    local image=$2
+    local port_mapping=$3
+    local health_url=$4
+    shift 4
+    local extra_args=("$@")
+
+    # Check if container exists
+    if container_exists "$name"; then
+        ok "$name container exists"
+        start_container_if_stopped "$name"
+        return 0
+    fi
+
+    warn "Creating $name container..."
+
+    # Create container with provided arguments
+    if docker run -d \
+        --name "$name" \
+        -p "$port_mapping" \
+        --restart unless-stopped \
+        "${extra_args[@]}" \
+        "$image" >/dev/null 2>&1; then
+
+        ok "$name container created"
+
+        # Test health if URL provided
+        if [ -n "$health_url" ]; then
+            echo "  Waiting for $name to become healthy..."
+            if test_container_health "$name" "$health_url" 30 2; then
+                ok "$name is healthy"
+            else
+                warn "$name may not be fully ready yet"
+            fi
+        fi
+
+        return 0
+    else
+        err "Failed to create $name container"
+        return 1
+    fi
+}
+
 echo -e "${MAGENTA}"
 cat << 'EOF'
 
@@ -204,19 +316,50 @@ step "Checking Docker..."
 if command -v docker &> /dev/null; then
     ok "Docker already installed"
 
-    # Check if daemon is running
-    if docker info &> /dev/null; then
-        ok "Docker daemon is running"
-    else
-        warn "Docker is installed but not running"
+    # Check if daemon is running with timeout
+    echo "  Checking Docker daemon..."
+    MAX_WAIT=90
+    WAIT_INTERVAL=5
+    elapsed=0
 
-        if [[ "$OS" == "macos" ]]; then
-            echo "     Please start Docker Desktop"
-        else
-            echo "     Try: sudo systemctl start docker"
+    while [ $elapsed -lt $MAX_WAIT ]; do
+        if docker info &> /dev/null; then
+            ok "Docker daemon is running"
+            break
         fi
 
-        read -p "Press Enter when Docker is running..."
+        if [ $elapsed -eq 0 ]; then
+            warn "Docker daemon not responding, attempting to start..."
+
+            if [[ "$OS" == "macos" ]]; then
+                echo "  Opening Docker Desktop..."
+                open -a Docker 2>/dev/null || true
+            else
+                echo "  Starting Docker service..."
+                sudo systemctl start docker 2>/dev/null || true
+            fi
+        fi
+
+        echo "  Still waiting for Docker daemon... (${elapsed}s/${MAX_WAIT}s)"
+        sleep $WAIT_INTERVAL
+        elapsed=$((elapsed + WAIT_INTERVAL))
+    done
+
+    # Final check
+    if ! docker info &> /dev/null; then
+        err "Docker daemon failed to start after ${MAX_WAIT}s"
+        echo ""
+        echo "Troubleshooting:"
+        if [[ "$OS" == "macos" ]]; then
+            echo "  1. Manually open Docker Desktop from Applications"
+            echo "  2. Wait for Docker to fully start (whale icon in menu bar)"
+            echo "  3. Re-run this script"
+        else
+            echo "  1. Check Docker service: sudo systemctl status docker"
+            echo "  2. View logs: sudo journalctl -xeu docker"
+            echo "  3. Try: sudo systemctl restart docker"
+        fi
+        exit 1
     fi
 else
     warn "Installing Docker..."
@@ -270,59 +413,48 @@ else
 fi
 
 # =============================================================================
-# STEP 3: Pull Docker Containers
+# STEP 3: Pre-pull Docker Images (Optimization)
+# =============================================================================
+step "Pre-downloading Docker images (speeds up container creation)..."
+
+# Pre-pull all images in parallel for faster installation
+pull_docker_image "unclecode/crawl4ai:latest" &
+pull_docker_image "mintplexlabs/anythingllm:latest" &
+
+# Wait for both pulls to complete
+wait
+
+ok "All Docker images downloaded"
+
+# =============================================================================
+# STEP 4: Create Docker Containers
 # =============================================================================
 step "Setting up Crawl4AI container..."
-
-if docker ps -a --format '{{.Names}}' | grep -q "^crawl4ai$"; then
-    ok "Crawl4AI container exists"
-
-    if ! docker ps --format '{{.Names}}' | grep -q "^crawl4ai$"; then
-        warn "Starting Crawl4AI container..."
-        docker start crawl4ai
-    fi
-else
-    warn "Creating Crawl4AI container..."
-    docker run -d \
-        --name crawl4ai \
-        -p 11235:11235 \
-        -v crawl4ai-data:/app/data \
-        --restart unless-stopped \
-        unclecode/crawl4ai:latest
-    ok "Crawl4AI container created"
-fi
+install_docker_container "crawl4ai" \
+    "unclecode/crawl4ai:latest" \
+    "11235:11235" \
+    "http://localhost:11235/health" \
+    -v crawl4ai-data:/app/data
 
 step "Setting up AnythingLLM container..."
 
-if docker ps -a --format '{{.Names}}' | grep -q "^anythingllm$"; then
-    ok "AnythingLLM container exists"
+# Create storage directory with correct permissions before creating container
+REAL_HOME=$(eval echo ~${SUDO_USER:-$USER} 2>/dev/null || echo "$HOME")
+STORAGE_DIR="$REAL_HOME/.anythingllm/storage"
 
-    if ! docker ps --format '{{.Names}}' | grep -q "^anythingllm$"; then
-        warn "Starting AnythingLLM container..."
-        docker start anythingllm
-    fi
-else
-    warn "Creating AnythingLLM container..."
-
-    # Create storage directory with correct permissions for container user (UID 1000)
-    # Use absolute path to avoid issues when running with sudo
-    REAL_HOME=$(eval echo ~${SUDO_USER:-$USER} 2>/dev/null || echo "$HOME")
-    STORAGE_DIR="$REAL_HOME/.anythingllm/storage"
+if ! container_exists "anythingllm"; then
     mkdir -p "$STORAGE_DIR"
     chmod 755 "$STORAGE_DIR"
     # AnythingLLM container runs as UID 1000, not root
-    chown -R 1000:1000 "$REAL_HOME/.anythingllm"
-
-    docker run -d \
-        --name anythingllm \
-        -p 3001:3001 \
-        -e STORAGE_DIR="/app/server/storage" \
-        -v "$STORAGE_DIR:/app/server/storage" \
-        --restart unless-stopped \
-        mintplexlabs/anythingllm:latest
-
-    ok "AnythingLLM container created"
+    chown -R 1000:1000 "$REAL_HOME/.anythingllm" 2>/dev/null || true
 fi
+
+install_docker_container "anythingllm" \
+    "mintplexlabs/anythingllm:latest" \
+    "3001:3001" \
+    "http://localhost:3001/api/ping" \
+    -e STORAGE_DIR="/app/server/storage" \
+    -v "$STORAGE_DIR:/app/server/storage"
 
 step "Setting up yt-dlp-server container (YouTube transcripts)..."
 
@@ -398,9 +530,36 @@ else
     ok "whisper-server container created"
 fi
 
-# Wait for containers
-echo "Waiting for containers to become healthy..."
-sleep 30
+# Wait for containers to become healthy
+step "Verifying container health..."
+
+echo "  Checking Crawl4AI..."
+if test_container_health "crawl4ai" "http://localhost:11235/health" 30 2; then
+    ok "Crawl4AI is healthy"
+else
+    warn "Crawl4AI may not be fully ready yet"
+fi
+
+echo "  Checking AnythingLLM..."
+if test_container_health "anythingllm" "http://localhost:3001/api/ping" 30 2; then
+    ok "AnythingLLM is healthy"
+else
+    warn "AnythingLLM may not be fully ready yet"
+fi
+
+echo "  Checking yt-dlp-server..."
+if test_container_health "yt-dlp-server" "http://localhost:8501/health" 30 2; then
+    ok "yt-dlp-server is healthy"
+else
+    warn "yt-dlp-server may not be fully ready yet"
+fi
+
+echo "  Checking whisper-server..."
+if test_container_health "whisper-server" "http://localhost:8502/health" 30 2; then
+    ok "whisper-server is healthy"
+else
+    warn "whisper-server may not be fully ready yet"
+fi
 
 # =============================================================================
 # STEP 4: Install MCP Servers
@@ -608,22 +767,73 @@ else
 fi
 
 # =============================================================================
-# STEP 6: Create Claude Code MCP Configuration
+# STEP 6: Create/Merge Claude Code MCP Configuration
 # =============================================================================
-step "Creating Claude Code MCP configuration..."
+step "Configuring Claude Code MCP servers..."
 
 # IMPORTANT: Claude Code reads MCP config from ~/.claude.json (mcpServers section at root level)
 CLAUDE_JSON_PATH="$HOME/.claude.json"
 
+# Define MCP servers to add
+declare -A MCP_SERVERS=(
+    ["anythingllm"]='{"command":"node","args":["'$HOME'/.claude/mcp-servers/anythingllm-mcp-server/src/index.js"],"env":{"ANYTHINGLLM_API_KEY":"YOUR_API_KEY_HERE","ANYTHINGLLM_BASE_URL":"http://localhost:3001"}}'
+    ["duckduckgo-search"]='{"command":"mcp-duckduckgo"}'
+    ["yt-dlp"]='{"command":"node","args":["'$HOME'/.claude/mcp-servers/yt-dlp-mcp/lib/index.mjs"]}'
+    ["crawl4ai"]='{"type":"sse","url":"http://localhost:11235/mcp/sse"}'
+)
+
 if [ -f "$CLAUDE_JSON_PATH" ]; then
-    warn "MCP configuration file already exists at: $CLAUDE_JSON_PATH"
-    echo "     Please manually add the following MCP servers if not present:"
-    echo "     - anythingllm"
-    echo "     - duckduckgo-search"
-    echo "     - yt-dlp"
-    echo "     - crawl4ai"
+    warn "MCP configuration file exists, merging new servers..."
+
+    # Check if file has mcpServers section
+    if ! grep -q '"mcpServers"' "$CLAUDE_JSON_PATH"; then
+        # Add mcpServers section to existing file
+        echo "  Adding mcpServers section..."
+
+        # Use jq if available, otherwise manual JSON manipulation
+        if command -v jq &> /dev/null; then
+            jq '. + {"mcpServers": {}}' "$CLAUDE_JSON_PATH" > "$CLAUDE_JSON_PATH.tmp"
+            mv "$CLAUDE_JSON_PATH.tmp" "$CLAUDE_JSON_PATH"
+        else
+            # Manual insertion before last }
+            sed -i.bak '$s/}$/,"mcpServers":{}}/' "$CLAUDE_JSON_PATH"
+        fi
+    fi
+
+    # Merge each server
+    SERVERS_ADDED=0
+    SERVERS_SKIPPED=0
+
+    for server_name in "${!MCP_SERVERS[@]}"; do
+        if grep -q "\"$server_name\"" "$CLAUDE_JSON_PATH"; then
+            echo "  - $server_name: already configured (skipped)"
+            SERVERS_SKIPPED=$((SERVERS_SKIPPED + 1))
+        else
+            echo "  - $server_name: adding..."
+
+            if command -v jq &> /dev/null; then
+                # Use jq for clean JSON manipulation
+                jq ".mcpServers.\"$server_name\" = ${MCP_SERVERS[$server_name]}" "$CLAUDE_JSON_PATH" > "$CLAUDE_JSON_PATH.tmp"
+                mv "$CLAUDE_JSON_PATH.tmp" "$CLAUDE_JSON_PATH"
+            else
+                # Manual JSON insertion (more fragile but works without jq)
+                # Insert before closing } of mcpServers
+                SERVER_JSON="${MCP_SERVERS[$server_name]}"
+                sed -i.bak "/\"mcpServers\".*{/a\\
+    \"$server_name\": $SERVER_JSON," "$CLAUDE_JSON_PATH"
+            fi
+
+            SERVERS_ADDED=$((SERVERS_ADDED + 1))
+        fi
+    done
+
+    ok "MCP configuration updated: $SERVERS_ADDED added, $SERVERS_SKIPPED skipped"
+
 else
-    cat > "$CLAUDE_JSON_PATH" << EOF
+    # Create new file
+    echo "  Creating new MCP configuration file..."
+
+    cat > "$CLAUDE_JSON_PATH" << 'EOF'
 {
   "mcpServers": {
     "anythingllm": {
@@ -648,6 +858,11 @@ else
   }
 }
 EOF
+
+    # Replace $HOME placeholder with actual path
+    sed -i.bak "s|\$HOME|$HOME|g" "$CLAUDE_JSON_PATH"
+    rm -f "$CLAUDE_JSON_PATH.bak"
+
     ok "MCP configuration created at: $CLAUDE_JSON_PATH"
 fi
 
